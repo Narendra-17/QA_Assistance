@@ -67,7 +67,21 @@ export interface QaIssue {
   severity: QaIssueSeverity;
   possibleCause: string;
   suggestedFix: string;
+  /** @nullable */
+  codeSnippet?: string | null;
+  /** @nullable */
+  filePath?: string | null;
+  /** @nullable */
+  lineNumber?: number | null;
 }
+
+export type QaReportTestType =
+  (typeof QaReportTestType)[keyof typeof QaReportTestType];
+
+export const QaReportTestType = {
+  url: "url",
+  sast: "sast",
+} as const;
 
 export interface QaReport {
   summary: string;
@@ -80,6 +94,7 @@ export interface QaReport {
   recommendations: string[];
   /** @nullable */
   screenshotBase64?: string | null;
+  testType?: QaReportTestType;
 }
 
 export type QaRunStatus = (typeof QaRunStatus)[keyof typeof QaRunStatus];
@@ -91,12 +106,24 @@ export const QaRunStatus = {
   failed: "failed",
 } as const;
 
+export type QaRunType = (typeof QaRunType)[keyof typeof QaRunType];
+
+export const QaRunType = {
+  url: "url",
+  sast: "sast",
+} as const;
+
 export interface QaRun {
   id: string;
   userId: string;
-  appUrl: string;
-  appDescription: string;
+  /** @nullable */
+  appUrl?: string | null;
+  /** @nullable */
+  appDescription?: string | null;
+  /** @nullable */
+  projectName?: string | null;
   status: QaRunStatus;
+  runType: QaRunType;
   /** @nullable */
   errorMessage?: string | null;
   createdAt: string;
@@ -117,15 +144,23 @@ export interface CreateQaRunRequest {
   appDescription: string;
 }
 
+export interface QaStats {
+  totalRuns: number;
+  completedRuns: number;
+  failedRuns: number;
+  averageScore: number;
+  criticalIssues: number;
+  highIssues: number;
+  urlRuns?: number;
+  sastRuns?: number;
+}
+
 /**
- * Opaque session token — `Bearer <sid>`.
+ * Opaque session token.
  */
 export type AuthorizationSessionHeaderParameter = string;
 
 export type BeginBrowserLoginParams = {
-  /**
-   * Relative path to redirect to after login (must start with `/`). Defaults to `/`.
-   */
   returnTo?: string;
 };
 
@@ -133,4 +168,12 @@ export type HandleBrowserLoginCallbackParams = {
   code?: string;
   state?: string;
   iss?: string;
+};
+
+export type CreateSastRunBody = {
+  /** @minLength 1 */
+  projectName: string;
+  /** @minLength 5 */
+  description: string;
+  files?: Blob[];
 };

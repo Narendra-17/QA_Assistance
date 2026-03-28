@@ -19,10 +19,7 @@ export const HealthCheckResponse = zod.object({
  * @summary Get the currently authenticated user
  */
 export const GetCurrentAuthUserHeader = zod.object({
-  Authorization: zod
-    .string()
-    .optional()
-    .describe("Opaque session token — `Bearer <sid>`."),
+  Authorization: zod.string().optional().describe("Opaque session token."),
 });
 
 export const GetCurrentAuthUserResponse = zod.object({
@@ -42,12 +39,7 @@ export const GetCurrentAuthUserResponse = zod.object({
  * @summary Start the browser OIDC login flow
  */
 export const BeginBrowserLoginQueryParams = zod.object({
-  returnTo: zod.coerce
-    .string()
-    .optional()
-    .describe(
-      "Relative path to redirect to after login (must start with `\/`). Defaults to `\/`.",
-    ),
+  returnTo: zod.coerce.string().optional(),
 });
 
 /**
@@ -63,10 +55,7 @@ export const HandleBrowserLoginCallbackQueryParams = zod.object({
  * @summary Clear the session and begin OIDC logout
  */
 export const LogoutBrowserSessionHeader = zod.object({
-  Authorization: zod
-    .string()
-    .optional()
-    .describe("Opaque session token — `Bearer <sid>`."),
+  Authorization: zod.string().optional().describe("Opaque session token."),
 });
 
 /**
@@ -89,10 +78,7 @@ export const ExchangeMobileAuthorizationCodeResponse = zod.object({
  * @summary Delete a mobile session token
  */
 export const LogoutMobileSessionHeader = zod.object({
-  Authorization: zod
-    .string()
-    .optional()
-    .describe("Opaque session token — `Bearer <sid>`."),
+  Authorization: zod.string().optional().describe("Opaque session token."),
 });
 
 export const LogoutMobileSessionResponse = zod.object({
@@ -107,9 +93,11 @@ export const ListQaRunsResponse = zod.object({
     zod.object({
       id: zod.string(),
       userId: zod.string(),
-      appUrl: zod.string(),
-      appDescription: zod.string(),
+      appUrl: zod.string().nullish(),
+      appDescription: zod.string().nullish(),
+      projectName: zod.string().nullish(),
       status: zod.enum(["pending", "running", "completed", "failed"]),
+      runType: zod.enum(["url", "sast"]),
       errorMessage: zod.string().nullish(),
       createdAt: zod.date(),
       updatedAt: zod.date(),
@@ -118,7 +106,7 @@ export const ListQaRunsResponse = zod.object({
 });
 
 /**
- * @summary Create a new QA test run
+ * @summary Create a new live URL QA test run
  */
 export const createQaRunBodyAppDescriptionMin = 10;
 
@@ -141,9 +129,11 @@ export const GetQaRunResponse = zod
   .object({
     id: zod.string(),
     userId: zod.string(),
-    appUrl: zod.string(),
-    appDescription: zod.string(),
+    appUrl: zod.string().nullish(),
+    appDescription: zod.string().nullish(),
+    projectName: zod.string().nullish(),
     status: zod.enum(["pending", "running", "completed", "failed"]),
+    runType: zod.enum(["url", "sast"]),
     errorMessage: zod.string().nullish(),
     createdAt: zod.date(),
     updatedAt: zod.date(),
@@ -161,6 +151,9 @@ export const GetQaRunResponse = zod
                 severity: zod.enum(["low", "medium", "high", "critical"]),
                 possibleCause: zod.string(),
                 suggestedFix: zod.string(),
+                codeSnippet: zod.string().nullish(),
+                filePath: zod.string().nullish(),
+                lineNumber: zod.number().nullish(),
               }),
             ),
             overallScore: zod
@@ -169,6 +162,7 @@ export const GetQaRunResponse = zod
               .max(getQaRunResponseTwoReportOneOverallScoreMax),
             recommendations: zod.array(zod.string()),
             screenshotBase64: zod.string().nullish(),
+            testType: zod.enum(["url", "sast"]).optional(),
           }),
           zod.null(),
         ])
@@ -185,4 +179,30 @@ export const DeleteQaRunParams = zod.object({
 
 export const DeleteQaRunResponse = zod.object({
   success: zod.boolean(),
+});
+
+/**
+ * @summary Get aggregate stats for the authenticated user
+ */
+export const GetQaStatsResponse = zod.object({
+  totalRuns: zod.number(),
+  completedRuns: zod.number(),
+  failedRuns: zod.number(),
+  averageScore: zod.number(),
+  criticalIssues: zod.number(),
+  highIssues: zod.number(),
+  urlRuns: zod.number().optional(),
+  sastRuns: zod.number().optional(),
+});
+
+/**
+ * @summary Create a SAST run by uploading source files
+ */
+
+export const createSastRunBodyDescriptionMin = 5;
+
+export const CreateSastRunBody = zod.object({
+  projectName: zod.string().min(1),
+  description: zod.string().min(createSastRunBodyDescriptionMin),
+  files: zod.array(zod.instanceof(File)).optional(),
 });

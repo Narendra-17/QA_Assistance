@@ -1,296 +1,281 @@
-import { Router, type IRouter, type Request, type Response } from "express";
-import { db, qaRunsTable } from "@workspace/db";
+import { Router, type Request, type Response } from "express";
+import { db } from "@workspace/db";
+import { qaRunsTable } from "@workspace/db/schema";
 import { eq, and, desc } from "drizzle-orm";
-import { CreateQaRunBody, GetQaRunParams, DeleteQaRunParams } from "@workspace/api-zod";
-import { openai } from "@workspace/integrations-openai-ai-server";
-import https from "https";
-import http from "http";
+import { z } from "zod/v4";
+import OpenAI from "openai";
+import multer from "multer";
+import path from "path";
 
-const router: IRouter = Router();
+const router = Router();
 
-interface QaIssue {
-  title: string;
-  description: string;
-  severity: "low" | "medium" | "high" | "critical";
-  possibleCause: string;
-  suggestedFix: string;
+const openai = new OpenAI({
+  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+});
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 30 },
+});
+
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+const CODE_EXTS = new Set([
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+  ".py", ".java", ".kt", ".cs", ".go", ".rb", ".php",
+  ".c", ".cpp", ".h", ".hpp", ".rs",
+  ".html", ".vue", ".svelte",
+  ".env", ".env.example", ".json", ".yaml", ".yml",
+  ".toml", ".sh", ".bash", ".sql", ".graphql",
+]);
+
+function isCodeFile(filename: string): boolean {
+  const ext = path.extname(filename).toLowerCase();
+  const base = path.basename(filename).toLowerCase();
+  return CODE_EXTS.has(ext) || base === "dockerfile" || base === ".env";
 }
 
-interface QaReport {
-  summary: string;
-  issues: QaIssue[];
-  overallScore: number;
-  recommendations: string[];
-  screenshotBase64: null;
-}
-
-function fetchPageContent(url: string): Promise<{ html: string; statusCode: number; headers: Record<string, string>; error?: string }> {
-  return new Promise((resolve) => {
-    const timeoutMs = 10000;
-    const protocol = url.startsWith("https") ? https : http;
-
-    const req = protocol.get(url, {
-      timeout: timeoutMs,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; QA-Assistant/1.0)",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
-    }, (res) => {
-      let data = "";
-      res.on("data", (chunk) => { data += chunk; });
-      res.on("end", () => {
-        const headers: Record<string, string> = {};
-        for (const [k, v] of Object.entries(res.headers)) {
-          if (v) headers[k] = Array.isArray(v) ? v.join(", ") : v;
-        }
-        resolve({ html: data.slice(0, 50000), statusCode: res.statusCode || 0, headers });
-      });
-      res.on("error", (e) => resolve({ html: "", statusCode: 0, headers: {}, error: e.message }));
-    });
-
-    req.on("error", (e) => resolve({ html: "", statusCode: 0, headers: {}, error: e.message }));
-    req.on("timeout", () => {
-      req.destroy();
-      resolve({ html: "", statusCode: 0, headers: {}, error: "Request timed out after 10s" });
-    });
-  });
-}
-
-function extractPageInfo(html: string, url: string, statusCode: number, headers: Record<string, string>, fetchError?: string) {
-  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() || "No title found";
-  const h1s = [...html.matchAll(/<h1[^>]*>([\s\S]*?)<\/h1>/gi)].map(m => m[1].replace(/<[^>]+>/g, "").trim()).filter(Boolean).slice(0, 5);
-  const h2s = [...html.matchAll(/<h2[^>]*>([\s\S]*?)<\/h2>/gi)].map(m => m[1].replace(/<[^>]+>/g, "").trim()).filter(Boolean).slice(0, 8);
-  const forms = [...html.matchAll(/<form[^>]*>([\s\S]*?)<\/form>/gi)].length;
-  const inputs = [...html.matchAll(/<input[^>]*>/gi)].length;
-  const buttons = [...html.matchAll(/<button[^>]*>/gi)].length;
-  const links = [...html.matchAll(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>/gi)].map(m => m[1]).slice(0, 15);
-  const images = [...html.matchAll(/<img[^>]*>/gi)].length;
-  const hasJavaScript = html.includes("<script");
-  const metaTags = [...html.matchAll(/<meta[^>]*>/gi)].map(m => m[0]).slice(0, 10);
-  const consoleErrors: string[] = [];
-  const missingAlt = [...html.matchAll(/<img(?![^>]*alt=)[^>]*>/gi)].length;
-  const contentLength = html.length;
-  const responseTime = statusCode > 0 ? "Available" : "Not measurable";
-  const contentType = headers["content-type"] || "unknown";
-  const hasViewport = html.includes('name="viewport"') || html.includes("name='viewport'");
-  const hasOpenGraph = html.includes('property="og:');
-  const bodyText = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 3000);
-
-  return {
-    url,
-    statusCode,
-    fetchError,
-    title,
-    h1s,
-    h2s,
-    forms,
-    inputs,
-    buttons,
-    links,
-    images,
-    missingAlt,
-    hasJavaScript,
-    metaTags,
-    contentLength,
-    responseTime,
-    contentType,
-    hasViewport,
-    hasOpenGraph,
-    bodyText,
-    consoleErrors,
+async function analyzeUrl(appUrl: string, appDescription: string): Promise<Record<string, unknown>> {
+  let pageContent = "";
+  const securityHeaders: Record<string, string | null> = {
+    "strict-transport-security": null,
+    "content-security-policy": null,
+    "x-content-type-options": null,
+    "x-frame-options": null,
+    "x-xss-protection": null,
+    "referrer-policy": null,
+    "permissions-policy": null,
   };
-}
-
-async function runQaAnalysis(runId: string, appUrl: string, appDescription: string) {
-  await db.update(qaRunsTable).set({ status: "running" }).where(eq(qaRunsTable.id, runId));
 
   try {
-    const { html, statusCode, headers, error: fetchError } = await fetchPageContent(appUrl);
-    const pageInfo = extractPageInfo(html, appUrl, statusCode, headers, fetchError);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    const resp = await fetch(appUrl, {
+      signal: controller.signal,
+      headers: { "User-Agent": "QAAssistant/1.0" },
+    });
+    clearTimeout(timeout);
 
-    const systemPrompt = `You are an expert QA engineer who analyzes web applications. 
-Your job is to analyze the provided page data and generate a comprehensive QA report.
-You must respond ONLY with a valid JSON object matching this exact structure:
+    for (const h of Object.keys(securityHeaders)) {
+      securityHeaders[h] = resp.headers.get(h);
+    }
+
+    const html = await resp.text();
+    const title = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] ?? "N/A";
+    const headings = [...html.matchAll(/<h[1-3][^>]*>([^<]+)<\/h/gi)].slice(0, 10).map(m => m[1]);
+    const forms = (html.match(/<form/gi) ?? []).length;
+    const links = (html.match(/<a\s+[^>]*href/gi) ?? []).length;
+    const inputs = (html.match(/<input/gi) ?? []).length;
+    const scripts = (html.match(/<script/gi) ?? []).length;
+    const metaTags = [...html.matchAll(/<meta[^>]+>/gi)].slice(0, 5).map(m => m[0].slice(0, 200));
+    const hasHttps = appUrl.startsWith("https://");
+
+    pageContent = JSON.stringify({
+      url: appUrl,
+      statusCode: resp.status,
+      isHttps: hasHttps,
+      title, headings, formCount: forms, linkCount: links,
+      inputCount: inputs, scriptCount: scripts, securityHeaders, metaTags,
+    });
+  } catch (err) {
+    const fetchError = err instanceof Error ? err.message : String(err);
+    pageContent = JSON.stringify({ url: appUrl, fetchError, securityHeaders });
+  }
+
+  const prompt = `You are a senior QA engineer and security auditor. Produce a comprehensive quality report for this web application.
+
+Application URL: ${appUrl}
+Developer description: ${appDescription}
+Page data: ${pageContent}
+
+Respond with ONLY valid JSON:
 {
-  "summary": "string - overall assessment of the application",
+  "summary": "2-3 sentence executive summary",
   "issues": [
     {
-      "title": "string",
-      "description": "string - detailed description of the issue",
-      "severity": "low" | "medium" | "high" | "critical",
-      "possibleCause": "string",
-      "suggestedFix": "string"
+      "title": "Issue title",
+      "description": "Detailed description",
+      "severity": "critical|high|medium|low",
+      "possibleCause": "Root cause analysis",
+      "suggestedFix": "Actionable fix",
+      "codeSnippet": null,
+      "filePath": null,
+      "lineNumber": null
     }
   ],
-  "overallScore": number (0-100),
-  "recommendations": ["string"]
-}
-Be thorough and identify real issues. Score 0-100 where 100 is perfect. Consider: accessibility, SEO, performance indicators, UI completeness, security headers, and how well the app matches the described functionality.`;
-
-    const userPrompt = `Analyze this web application for QA issues.
-
-User's description of expected functionality:
-${appDescription}
-
-Page Analysis Results:
-- URL: ${pageInfo.url}
-- HTTP Status Code: ${pageInfo.statusCode || "Failed to connect"}
-- Fetch Error: ${pageInfo.fetchError || "None"}
-- Content Type: ${pageInfo.contentType}
-- Page Title: ${pageInfo.title}
-- H1 Tags: ${pageInfo.h1s.join(", ") || "None found"}
-- H2 Tags: ${pageInfo.h2s.join(", ") || "None found"}
-- Forms: ${pageInfo.forms}
-- Input Fields: ${pageInfo.inputs}
-- Buttons: ${pageInfo.buttons}
-- Images: ${pageInfo.images} (${pageInfo.missingAlt} missing alt text)
-- Internal/External Links: ${pageInfo.links.slice(0, 8).join(", ")}
-- Has JavaScript: ${pageInfo.hasJavaScript}
-- Has Viewport Meta: ${pageInfo.hasViewport}
-- Has Open Graph Tags: ${pageInfo.hasOpenGraph}
-- Content Length: ${pageInfo.contentLength} bytes
-- Security Headers Present: ${Object.keys(pageInfo.headers).filter(h => ["x-frame-options","x-content-type-options","strict-transport-security","content-security-policy"].includes(h.toLowerCase())).join(", ") || "None detected"}
-- Meta Tags: ${pageInfo.metaTags.join("; ")}
-- Page Text Sample: ${pageInfo.bodyText.slice(0, 1500)}
-
-Identify issues based on:
-1. Whether the app appears to match the described functionality
-2. Accessibility issues (missing alt text, viewport meta, etc.)
-3. SEO issues (missing title, meta description, OG tags)
-4. Security concerns (missing security headers)
-5. Performance indicators (page size, javascript usage)
-6. UI/UX completeness (expected forms/buttons based on description)
-7. Connectivity/availability issues
-8. Any other quality concerns
-
-Generate between 3-12 issues. Be specific and actionable.`;
-
-    const response = await openai.chat.completions.create({
-      model: "gpt-5.2",
-      max_completion_tokens: 8192,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-    });
-
-    const content = response.choices[0]?.message?.content;
-    if (!content) throw new Error("No response from AI");
-
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("Could not parse AI response as JSON");
-
-    const report: QaReport = JSON.parse(jsonMatch[0]);
-    report.screenshotBase64 = null;
-
-    report.overallScore = Math.max(0, Math.min(100, Math.round(report.overallScore)));
-
-    await db.update(qaRunsTable).set({
-      status: "completed",
-      report: report as unknown as Record<string, unknown>,
-    }).where(eq(qaRunsTable.id, runId));
-
-  } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : "Unknown error";
-    await db.update(qaRunsTable).set({
-      status: "failed",
-      errorMessage: errorMsg,
-    }).where(eq(qaRunsTable.id, runId));
-  }
+  "overallScore": <0-100>,
+  "recommendations": ["Recommendation 1", "Recommendation 2"],
+  "testType": "url"
 }
 
-router.get("/qa/runs", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
+Rules: If fetch failed, base analysis on URL and description. Score = 100 - (critical×25 + high×12 + medium×5 + low×2), min 0. Include 4-10 issues covering security, performance, accessibility, UX, SEO. Sort by severity desc.`;
 
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [{ role: "user", content: prompt }],
+    response_format: { type: "json_object" },
+    temperature: 0.3,
+  });
+
+  return JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
+}
+
+async function analyzeCode(files: Array<{ name: string; content: string }>, projectName: string, description: string): Promise<Record<string, unknown>> {
+  const filesSummary = files
+    .slice(0, 25)
+    .map(f => `### ${f.name}\n\`\`\`\n${f.content.slice(0, 2500)}\n\`\`\``)
+    .join("\n\n");
+
+  const prompt = `You are a senior security engineer performing Static Application Security Testing (SAST). Analyze the source code for security vulnerabilities, code quality issues, and best-practice violations.
+
+Project: ${projectName}
+Description: ${description}
+Files analyzed: ${files.length}
+
+${filesSummary}
+
+Respond with ONLY valid JSON:
+{
+  "summary": "2-3 sentence executive summary of security posture",
+  "issues": [
+    {
+      "title": "Vulnerability title",
+      "description": "Detailed explanation",
+      "severity": "critical|high|medium|low",
+      "possibleCause": "Root cause or anti-pattern",
+      "suggestedFix": "Concrete fix with example code snippet",
+      "codeSnippet": "Relevant vulnerable code (or null)",
+      "filePath": "path/to/file.ext or null",
+      "lineNumber": null
+    }
+  ],
+  "overallScore": <0-100>,
+  "recommendations": ["Strategic recommendation 1"],
+  "testType": "sast"
+}
+
+Check for: SQL injection, XSS, hardcoded secrets/API keys, insecure deps, CSRF, path traversal, insecure deserialization, broken auth, sensitive data exposure, XXE, IDOR, open redirect, command injection, weak crypto, missing input validation, debug code in prod, missing rate limiting, insecure CORS, prototype pollution. Score = 100 - (critical×25 + high×12 + medium×5 + low×2), min 0. Sort by severity desc.`;
+
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [{ role: "user", content: prompt }],
+    response_format: { type: "json_object" },
+    temperature: 0.2,
+  });
+
+  return JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
+}
+
+// ─── routes ─────────────────────────────────────────────────────────────────
+
+router.get("/runs", async (req: Request, res: Response) => {
+  if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
+  const userId = (req.user as { id: string }).id;
   const runs = await db
-    .select()
+    .select({
+      id: qaRunsTable.id, userId: qaRunsTable.userId, runType: qaRunsTable.runType,
+      appUrl: qaRunsTable.appUrl, appDescription: qaRunsTable.appDescription,
+      projectName: qaRunsTable.projectName, status: qaRunsTable.status,
+      errorMessage: qaRunsTable.errorMessage, createdAt: qaRunsTable.createdAt,
+      updatedAt: qaRunsTable.updatedAt,
+    })
     .from(qaRunsTable)
-    .where(eq(qaRunsTable.userId, req.user.id))
+    .where(eq(qaRunsTable.userId, userId))
     .orderBy(desc(qaRunsTable.createdAt));
-
   res.json({ runs });
 });
 
-router.post("/qa/runs", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
+router.get("/stats", async (req: Request, res: Response) => {
+  if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
+  const userId = (req.user as { id: string }).id;
+  const runs = await db.select().from(qaRunsTable).where(eq(qaRunsTable.userId, userId));
+
+  const completed = runs.filter(r => r.status === "completed");
+  let totalScore = 0, criticalIssues = 0, highIssues = 0;
+  for (const r of completed) {
+    const report = r.report as Record<string, unknown> | null;
+    if (report) {
+      totalScore += Number(report.overallScore ?? 0);
+      const issues = (report.issues as Array<{ severity: string }>) ?? [];
+      criticalIssues += issues.filter(i => i.severity === "critical").length;
+      highIssues += issues.filter(i => i.severity === "high").length;
+    }
   }
 
-  const parsed = CreateQaRunBody.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Invalid request: " + parsed.error.message });
-    return;
-  }
-
-  const { appUrl, appDescription } = parsed.data;
-
-  const [run] = await db.insert(qaRunsTable).values({
-    userId: req.user.id,
-    appUrl,
-    appDescription,
-    status: "pending",
-  }).returning();
-
-  res.status(201).json(run);
-
-  runQaAnalysis(run.id, appUrl, appDescription).catch((err) => {
-    req.log.error({ err }, "QA analysis failed");
+  res.json({
+    totalRuns: runs.length,
+    completedRuns: completed.length,
+    failedRuns: runs.filter(r => r.status === "failed").length,
+    averageScore: completed.length > 0 ? Math.round(totalScore / completed.length) : 0,
+    criticalIssues, highIssues,
+    urlRuns: runs.filter(r => r.runType === "url").length,
+    sastRuns: runs.filter(r => r.runType === "sast").length,
   });
 });
 
-router.get("/qa/runs/:id", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
+router.post("/runs", async (req: Request, res: Response) => {
+  if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
+  const userId = (req.user as { id: string }).id;
 
-  const parsed = GetQaRunParams.safeParse(req.params);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Invalid run ID" });
-    return;
-  }
+  const parsed = z.object({ appUrl: z.url(), appDescription: z.string().min(10) }).safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ error: "Invalid request" });
 
-  const [run] = await db
-    .select()
-    .from(qaRunsTable)
-    .where(and(eq(qaRunsTable.id, parsed.data.id), eq(qaRunsTable.userId, req.user.id)));
+  const { appUrl, appDescription } = parsed.data;
+  const [run] = await db.insert(qaRunsTable).values({ userId, runType: "url", appUrl, appDescription, status: "running" }).returning();
+  res.status(201).json(run);
 
-  if (!run) {
-    res.status(404).json({ error: "QA run not found" });
-    return;
-  }
-
-  res.json({ ...run, report: run.report ?? null });
+  analyzeUrl(appUrl, appDescription)
+    .then(report => db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, run.id)))
+    .catch(async (err) => {
+      const msg = err instanceof Error ? err.message : "Analysis failed";
+      await db.update(qaRunsTable).set({ status: "failed", errorMessage: msg }).where(eq(qaRunsTable.id, run.id));
+    });
 });
 
-router.delete("/qa/runs/:id", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) {
-    res.status(401).json({ error: "Unauthorized" });
-    return;
-  }
+router.post("/sast", upload.array("files", 30), async (req: Request, res: Response) => {
+  if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
+  const userId = (req.user as { id: string }).id;
 
-  const parsed = DeleteQaRunParams.safeParse(req.params);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Invalid run ID" });
-    return;
-  }
+  const parsed = z.object({ projectName: z.string().min(1), description: z.string().min(5) }).safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ error: "Invalid request" });
 
-  const [run] = await db
-    .select()
-    .from(qaRunsTable)
-    .where(and(eq(qaRunsTable.id, parsed.data.id), eq(qaRunsTable.userId, req.user.id)));
+  const { projectName, description } = parsed.data;
+  const uploadedFiles = req.files as Express.Multer.File[];
+  if (!uploadedFiles?.length) return void res.status(400).json({ error: "No files uploaded" });
 
-  if (!run) {
-    res.status(404).json({ error: "QA run not found" });
-    return;
-  }
+  const codeFiles = uploadedFiles
+    .filter(f => isCodeFile(f.originalname))
+    .map(f => ({ name: f.originalname, content: f.buffer.toString("utf-8").replace(/\0/g, "") }))
+    .filter(f => f.content.length > 0);
 
-  await db.delete(qaRunsTable).where(eq(qaRunsTable.id, parsed.data.id));
-  res.json({ success: true });
+  if (!codeFiles.length) return void res.status(400).json({ error: "No readable code files found. Please upload source code files." });
+
+  const [run] = await db.insert(qaRunsTable).values({ userId, runType: "sast", projectName, appDescription: description, status: "running" }).returning();
+  res.status(201).json(run);
+
+  analyzeCode(codeFiles, projectName, description)
+    .then(report => db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, run.id)))
+    .catch(async (err) => {
+      const msg = err instanceof Error ? err.message : "Analysis failed";
+      await db.update(qaRunsTable).set({ status: "failed", errorMessage: msg }).where(eq(qaRunsTable.id, run.id));
+    });
+});
+
+router.get("/runs/:id", async (req: Request, res: Response) => {
+  if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
+  const userId = (req.user as { id: string }).id;
+  const [run] = await db.select().from(qaRunsTable).where(and(eq(qaRunsTable.id, req.params.id), eq(qaRunsTable.userId, userId)));
+  if (!run) return void res.status(404).json({ error: "Not found" });
+  res.json(run);
+});
+
+router.delete("/runs/:id", async (req: Request, res: Response) => {
+  if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
+  const userId = (req.user as { id: string }).id;
+  const [deleted] = await db.delete(qaRunsTable).where(and(eq(qaRunsTable.id, req.params.id), eq(qaRunsTable.userId, userId))).returning();
+  if (!deleted) return void res.status(404).json({ error: "Not found" });
+  res.json({ success: true as const });
 });
 
 export default router;

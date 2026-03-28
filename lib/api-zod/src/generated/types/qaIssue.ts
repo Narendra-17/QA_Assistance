@@ -13,4 +13,10 @@ export interface QaIssue {
   severity: QaIssueSeverity;
   possibleCause: string;
   suggestedFix: string;
+  /** @nullable */
+  codeSnippet?: string | null;
+  /** @nullable */
+  filePath?: string | null;
+  /** @nullable */
+  lineNumber?: number | null;
 }

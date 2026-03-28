@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, real } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./auth";
@@ -6,8 +6,10 @@ import { usersTable } from "./auth";
 export const qaRunsTable = pgTable("qa_runs", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
   userId: text("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
-  appUrl: text("app_url").notNull(),
-  appDescription: text("app_description").notNull(),
+  runType: text("run_type", { enum: ["url", "sast"] }).notNull().default("url"),
+  appUrl: text("app_url"),
+  appDescription: text("app_description"),
+  projectName: text("project_name"),
   status: text("status", { enum: ["pending", "running", "completed", "failed"] }).notNull().default("pending"),
   errorMessage: text("error_message"),
   report: jsonb("report"),

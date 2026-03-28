@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { QaIssue } from "./qaIssue";
+import type { QaReportTestType } from "./qaReportTestType";
 
 export interface QaReport {
   summary: string;
@@ -18,4 +19,5 @@ export interface QaReport {
   recommendations: string[];
   /** @nullable */
   screenshotBase64?: string | null;
+  testType?: QaReportTestType;
 }

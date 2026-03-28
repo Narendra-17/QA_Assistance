@@ -1,155 +1,204 @@
 import { useListQaRuns, useDeleteQaRun, getListQaRunsQueryKey } from "@workspace/api-client-react";
 import { Link } from "wouter";
 import { format } from "date-fns";
-import { Plus, Trash2, ExternalLink, Activity } from "lucide-react";
+import { Plus, Trash2, ExternalLink, Globe, FileCode2, AlertTriangle, TrendingUp, Activity, CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { StatusBadge } from "@/components/status-badge";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
+import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
+import { StatusBadge } from "@/components/status-badge";
+import { useGetQaStats } from "@workspace/api-client-react";
+
+const CONTAINER = {
+  hidden: { opacity: 0 },
+  show: { opacity: 1, transition: { staggerChildren: 0.06 } },
+};
+const ITEM = {
+  hidden: { opacity: 0, y: 16 },
+  show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 280 } },
+};
+
+function StatCard({ label, value, sub, icon: Icon, color }: {
+  label: string; value: string | number; sub?: string;
+  icon: React.ElementType; color: string;
+}) {
+  return (
+    <motion.div variants={ITEM} className="stat-card p-5 flex items-start gap-4">
+      <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: `${color}15`, border: `1px solid ${color}25` }}>
+        <Icon className="w-5 h-5" style={{ color }} />
+      </div>
+      <div>
+        <div className="text-2xl font-display font-bold text-white">{value}</div>
+        <div className="text-sm text-zinc-400 mt-0.5">{label}</div>
+        {sub && <div className="text-xs text-zinc-600 mt-0.5">{sub}</div>}
+      </div>
+    </motion.div>
+  );
+}
+
+type FilterType = "all" | "url" | "sast";
 
 export default function Dashboard() {
-  const { data, isLoading } = useListQaRuns({
-    query: {
-      refetchInterval: (query) => {
-        // Poll if any runs are pending or running
-        const runs = query.state.data?.runs || [];
-        const needsPolling = runs.some(r => r.status === 'pending' || r.status === 'running');
-        return needsPolling ? 3000 : false;
-      }
-    }
-  });
-  
+  const [filter, setFilter] = useState<FilterType>("all");
+  const { data, isLoading } = useListQaRuns();
+  const { data: stats } = useGetQaStats();
+  const deleteMutation = useDeleteQaRun();
   const queryClient = useQueryClient();
-  const deleteMutation = useDeleteQaRun({
-    mutation: {
-      onSuccess: () => {
-        toast.success("Test run deleted");
-        queryClient.invalidateQueries({ queryKey: getListQaRunsQueryKey() });
-      },
-      onError: () => toast.error("Failed to delete test run")
-    }
-  });
 
-  const runs = data?.runs || [];
+  const allRuns = data?.runs ?? [];
+  const runs = filter === "all" ? allRuns : allRuns.filter(r => r.runType === filter);
+
+  function handleDelete(id: string, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    deleteMutation.mutate({ id }, {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getListQaRunsQueryKey() });
+        toast.success("Test run deleted");
+      },
+      onError: () => toast.error("Failed to delete"),
+    });
+  }
+
+  const scoreColor = (s: number) =>
+    s >= 80 ? "#10B981" : s >= 60 ? "#F59E0B" : s >= 40 ? "#F97316" : "#EF4444";
 
   return (
-    <div className="max-w-7xl mx-auto w-full space-y-8">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+    <div className="max-w-6xl mx-auto w-full space-y-8">
+      {/* Header */}
+      <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }}
+        className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-display font-bold text-foreground">Dashboard</h1>
-          <p className="text-muted-foreground mt-1 text-sm">Manage your automated QA test runs.</p>
+          <h1 className="text-3xl font-display font-bold text-white">Dashboard</h1>
+          <p className="text-zinc-500 mt-1 text-sm">Monitor your security assessments and test results.</p>
         </div>
-        <Button asChild className="rounded-full shadow-lg shadow-primary/20">
-          <Link href="/new">
-            <Plus className="w-4 h-4 mr-2" />
-            New Test Run
-          </Link>
-        </Button>
+        <div className="flex gap-2">
+          <Button asChild variant="outline" className="border-white/10 bg-white/4 hover:bg-white/8 text-white rounded-xl">
+            <Link href="/sast"><FileCode2 className="w-4 h-4 mr-1.5" />SAST Scan</Link>
+          </Button>
+          <Button asChild className="bg-violet-600 hover:bg-violet-500 text-white rounded-xl shadow-lg shadow-violet-900/30">
+            <Link href="/new"><Plus className="w-4 h-4 mr-1.5" />New URL Test</Link>
+          </Button>
+        </div>
+      </motion.div>
+
+      {/* Stats */}
+      {stats && (
+        <motion.div variants={CONTAINER} initial="hidden" animate="show"
+          className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <StatCard label="Total Runs" value={stats.totalRuns} icon={Activity} color="#8B5CF6" />
+          <StatCard label="Avg Score" value={stats.completedRuns > 0 ? `${stats.averageScore}/100` : "—"} icon={TrendingUp} color="#10B981"
+            sub={`${stats.completedRuns} completed`} />
+          <StatCard label="Critical Issues" value={stats.criticalIssues} icon={AlertTriangle} color="#EF4444"
+            sub={`+ ${stats.highIssues} high`} />
+          <StatCard label="SAST Scans" value={stats.sastRuns ?? 0} icon={FileCode2} color="#06B6D4"
+            sub={`${stats.urlRuns ?? 0} URL tests`} />
+        </motion.div>
+      )}
+
+      {/* Filter tabs */}
+      <div className="flex items-center gap-1 p-1 rounded-xl bg-white/4 border border-white/8 w-fit">
+        {(["all", "url", "sast"] as FilterType[]).map((f) => (
+          <button key={f} onClick={() => setFilter(f)}
+            className={[
+              "px-4 py-1.5 rounded-lg text-sm font-medium transition-all",
+              filter === f ? "bg-violet-600 text-white shadow-md" : "text-zinc-400 hover:text-zinc-200",
+            ].join(" ")}>
+            {f === "all" ? "All Runs" : f === "url" ? "🌐 URL Tests" : "📂 SAST Scans"}
+          </button>
+        ))}
       </div>
 
+      {/* Runs list */}
       {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[...Array(6)].map((_, i) => (
-            <Card key={i} className="h-48 animate-pulse bg-muted/20 border-border/50" />
+        <div className="space-y-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-20 rounded-2xl shimmer" />
           ))}
         </div>
       ) : runs.length === 0 ? (
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="flex flex-col items-center justify-center py-32 px-4 text-center border-2 border-dashed border-border/50 rounded-3xl bg-card/20 backdrop-blur-sm"
-        >
-          <div className="bg-primary/10 p-4 rounded-full mb-6">
-            <Activity className="w-8 h-8 text-primary" />
+        <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}
+          className="text-center py-24 glass-card">
+          <div className="w-16 h-16 rounded-2xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center mx-auto mb-4">
+            <Activity className="w-8 h-8 text-violet-400" />
           </div>
-          <h3 className="text-xl font-display font-semibold mb-2">No tests run yet</h3>
-          <p className="text-muted-foreground mb-8 max-w-md">
-            Create your first automated QA test to validate your application's functionality.
+          <h3 className="text-xl font-display font-bold text-white mb-2">No test runs yet</h3>
+          <p className="text-zinc-500 mb-6 text-sm max-w-xs mx-auto">
+            {filter !== "all" ? `No ${filter === "url" ? "URL tests" : "SAST scans"} found.` : "Start your first security assessment."}
           </p>
-          <Button asChild size="lg" className="rounded-full">
-            <Link href="/new">Create First Test</Link>
-          </Button>
+          <div className="flex gap-3 justify-center">
+            <Button asChild variant="outline" className="border-white/10 hover:bg-white/8 text-white rounded-xl">
+              <Link href="/sast"><FileCode2 className="w-4 h-4 mr-1.5" />SAST Scan</Link>
+            </Button>
+            <Button asChild className="bg-violet-600 hover:bg-violet-500 text-white rounded-xl">
+              <Link href="/new"><Plus className="w-4 h-4 mr-1.5" />URL Test</Link>
+            </Button>
+          </div>
         </motion.div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {runs.map((run, i) => (
-            <motion.div
-              key={run.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 }}
-            >
-              <Card className="glass-panel overflow-hidden group hover:border-primary/30 transition-colors h-full flex flex-col">
-                <div className="p-6 flex-1 flex flex-col">
-                  <div className="flex items-start justify-between mb-4 gap-4">
-                    <StatusBadge status={run.status} />
-                    
-                    <AlertDialog>
-                      <AlertDialogTrigger asChild>
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
-                          className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 -mr-2 -mt-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </AlertDialogTrigger>
-                      <AlertDialogContent className="glass-panel sm:max-w-md">
-                        <AlertDialogHeader>
-                          <AlertDialogTitle>Delete Test Run?</AlertDialogTitle>
-                          <AlertDialogDescription>
-                            This action cannot be undone. This will permanently delete the test run and its associated report.
-                          </AlertDialogDescription>
-                        </AlertDialogHeader>
-                        <AlertDialogFooter>
-                          <AlertDialogCancel className="rounded-full">Cancel</AlertDialogCancel>
-                          <AlertDialogAction 
-                            onClick={() => deleteMutation.mutate({ data: undefined as any, id: run.id })}
-                            className="bg-destructive hover:bg-destructive/90 rounded-full"
-                          >
-                            Delete
-                          </AlertDialogAction>
-                        </AlertDialogFooter>
-                      </AlertDialogContent>
-                    </AlertDialog>
-                  </div>
-                  
-                  <div className="space-y-1 mb-6 flex-1">
-                    <h3 className="font-semibold text-lg line-clamp-1 group-hover:text-primary transition-colors">
-                      {new URL(run.appUrl).hostname}
-                    </h3>
-                    <p className="text-sm text-muted-foreground line-clamp-2">
-                      {run.appDescription}
-                    </p>
-                  </div>
-                  
-                  <div className="flex items-center justify-between text-xs text-muted-foreground pt-4 border-t border-border/50">
-                    <span>{format(new Date(run.createdAt), 'MMM d, yyyy • h:mm a')}</span>
-                    <Button asChild variant="link" className="h-auto p-0 text-primary hover:text-primary/80 font-medium">
-                      <Link href={`/runs/${run.id}`}>
-                        View Details
-                        <ExternalLink className="ml-1.5 w-3 h-3" />
-                      </Link>
-                    </Button>
-                  </div>
-                </div>
-              </Card>
-            </motion.div>
-          ))}
-        </div>
+        <motion.div variants={CONTAINER} initial="hidden" animate="show" className="space-y-3">
+          <AnimatePresence>
+            {runs.map((run) => {
+              const report = (run as { report?: { overallScore?: number } }).report;
+              const score = report?.overallScore;
+              const isUrl = run.runType === "url";
+
+              return (
+                <motion.div key={run.id} variants={ITEM} layout exit={{ opacity: 0, x: -20 }}>
+                  <Link href={`/runs/${run.id}`}
+                    className="group flex items-center gap-4 px-5 py-4 rounded-2xl bg-white/3 border border-white/8 hover:bg-white/5 hover:border-white/14 transition-all cursor-pointer block">
+                    {/* Type icon */}
+                    <div className={[
+                      "w-10 h-10 rounded-xl flex items-center justify-center shrink-0",
+                      isUrl ? "bg-violet-500/12 border border-violet-500/20" : "bg-cyan-500/12 border border-cyan-500/20",
+                    ].join(" ")}>
+                      {isUrl
+                        ? <Globe className="w-5 h-5 text-violet-400" />
+                        : <FileCode2 className="w-5 h-5 text-cyan-400" />}
+                    </div>
+
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold text-white text-sm truncate max-w-xs">
+                          {run.appUrl ?? run.projectName ?? "Unnamed"}
+                        </span>
+                        <StatusBadge status={run.status as "pending" | "running" | "completed" | "failed"} />
+                      </div>
+                      <div className="text-xs text-zinc-500 mt-0.5 flex items-center gap-3">
+                        <span>{format(new Date(run.createdAt), "MMM d, yyyy · h:mm a")}</span>
+                        <span className="px-1.5 py-0.5 rounded-md bg-white/5 text-zinc-400">{isUrl ? "URL Test" : "SAST Scan"}</span>
+                      </div>
+                    </div>
+
+                    {/* Score */}
+                    {score !== undefined && (
+                      <div className="text-right shrink-0">
+                        <div className="text-xl font-display font-bold" style={{ color: scoreColor(score) }}>{score}</div>
+                        <div className="text-[10px] text-zinc-600 uppercase tracking-wider">Score</div>
+                      </div>
+                    )}
+
+                    {/* Actions */}
+                    <div className="flex items-center gap-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => handleDelete(run.id, e)}
+                        className="w-8 h-8 rounded-lg flex items-center justify-center text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-all"
+                        title="Delete"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center text-zinc-500 hover:text-white hover:bg-white/10 transition-all">
+                        <ExternalLink className="w-4 h-4" />
+                      </div>
+                    </div>
+                  </Link>
+                </motion.div>
+              );
+            })}
+          </AnimatePresence>
+        </motion.div>
       )}
     </div>
   );

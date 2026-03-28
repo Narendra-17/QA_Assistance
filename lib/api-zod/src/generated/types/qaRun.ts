@@ -6,13 +6,19 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { QaRunStatus } from "./qaRunStatus";
+import type { QaRunType } from "./qaRunType";
 
 export interface QaRun {
   id: string;
   userId: string;
-  appUrl: string;
-  appDescription: string;
+  /** @nullable */
+  appUrl?: string | null;
+  /** @nullable */
+  appDescription?: string | null;
+  /** @nullable */
+  projectName?: string | null;
   status: QaRunStatus;
+  runType: QaRunType;
   /** @nullable */
   errorMessage?: string | null;
   createdAt: Date;

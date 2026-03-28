@@ -7,6 +7,6 @@
  */
 
 /**
- * Opaque session token — `Bearer <sid>`.
+ * Opaque session token.
  */
 export type AuthorizationSessionHeaderParameter = string;

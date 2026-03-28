@@ -53,7 +53,6 @@ paths:
         - name: returnTo
           in: query
           required: false
-          description: Relative path to redirect to after login (must start with `/`). Defaults to `/`.
           schema:
             type: string
       responses:
@@ -84,7 +83,7 @@ paths:
             format: uri
       responses:
         '302':
-          description: Redirect to the `returnTo` path on success (defaults to `/`) or `/api/login` on failure.
+          description: Redirect.
 
   /logout:
     get:
@@ -96,7 +95,7 @@ paths:
         - $ref: '#/components/parameters/SessionCookie'
       responses:
         '302':
-          description: Redirect to the OIDC provider logout URL.
+          description: Redirect.
 
   /mobile-auth/token-exchange:
     post:
@@ -111,25 +110,25 @@ paths:
               $ref: '#/components/schemas/MobileTokenExchangeRequest'
       responses:
         '200':
-          description: Session created successfully.
+          description: Session created.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/MobileTokenExchangeSuccess'
         '400':
-          description: Missing or invalid required fields.
+          description: Bad request.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '401':
-          description: Token did not contain usable claims.
+          description: Unauthorized.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '500':
-          description: Token exchange failed.
+          description: Server error.
           content:
             application/json:
               schema:
@@ -171,7 +170,7 @@ paths:
     post:
       tags: [QA]
       operationId: createQaRun
-      summary: Create a new QA test run
+      summary: Create a new live URL QA test run
       requestBody:
         required: true
         content:
@@ -180,7 +179,7 @@ paths:
               $ref: '#/components/schemas/CreateQaRunRequest'
       responses:
         '201':
-          description: QA run created and queued
+          description: QA run created
           content:
             application/json:
               schema:
@@ -258,13 +257,76 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
+  /qa/stats:
+    get:
+      tags: [QA]
+      operationId: getQaStats
+      summary: Get aggregate stats for the authenticated user
+      responses:
+        '200':
+          description: Stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QaStats'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /qa/sast:
+    post:
+      tags: [QA]
+      operationId: createSastRun
+      summary: Create a SAST run by uploading source files
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [projectName, description]
+              properties:
+                projectName:
+                  type: string
+                  minLength: 1
+                description:
+                  type: string
+                  minLength: 5
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        '201':
+          description: SAST run created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QaRun'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
 components:
   parameters:
     AuthorizationSessionHeader:
       name: Authorization
       in: header
       required: false
-      description: Opaque session token — `Bearer <sid>`.
+      description: Opaque session token.
       schema:
         type: string
     SessionCookie:
@@ -370,6 +432,12 @@ components:
           type: string
         suggestedFix:
           type: string
+        codeSnippet:
+          type: [string, 'null']
+        filePath:
+          type: [string, 'null']
+        lineNumber:
+          type: [number, 'null']
 
     QaReport:
       type: object
@@ -391,25 +459,36 @@ components:
             type: string
         screenshotBase64:
           type: [string, 'null']
+        testType:
+          type: string
+          enum: [url, sast]
 
     QaRunStatus:
       type: string
       enum: [pending, running, completed, failed]
 
+    QaRunType:
+      type: string
+      enum: [url, sast]
+
     QaRun:
       type: object
-      required: [id, userId, appUrl, appDescription, status, createdAt, updatedAt]
+      required: [id, userId, status, runType, createdAt, updatedAt]
       properties:
         id:
           type: string
         userId:
           type: string
         appUrl:
-          type: string
+          type: [string, 'null']
         appDescription:
-          type: string
+          type: [string, 'null']
+        projectName:
+          type: [string, 'null']
         status:
           $ref: '#/components/schemas/QaRunStatus'
+        runType:
+          $ref: '#/components/schemas/QaRunType'
         errorMessage:
           type: [string, 'null']
         createdAt:
@@ -448,3 +527,24 @@ components:
         appDescription:
           type: string
           minLength: 10
+
+    QaStats:
+      type: object
+      required: [totalRuns, completedRuns, failedRuns, averageScore, criticalIssues, highIssues]
+      properties:
+        totalRuns:
+          type: number
+        completedRuns:
+          type: number
+        failedRuns:
+          type: number
+        averageScore:
+          type: number
+        criticalIssues:
+          type: number
+        highIssues:
+          type: number
+        urlRuns:
+          type: number
+        sastRuns:
+          type: number

@@ -20,6 +20,7 @@ import type {
   AuthUserEnvelope,
   BeginBrowserLoginParams,
   CreateQaRunRequest,
+  CreateSastRunBody,
   ErrorEnvelope,
   HandleBrowserLoginCallbackParams,
   HealthStatus,
@@ -29,6 +30,7 @@ import type {
   QaRun,
   QaRunListResponse,
   QaRunWithReport,
+  QaStats,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -716,7 +718,7 @@ export function useListQaRuns<
 }
 
 /**
- * @summary Create a new QA test run
+ * @summary Create a new live URL QA test run
  */
 export const getCreateQaRunUrl = () => {
   return `/api/qa/runs`;
@@ -779,7 +781,7 @@ export type CreateQaRunMutationBody = BodyType<CreateQaRunRequest>;
 export type CreateQaRunMutationError = ErrorType<ErrorEnvelope>;
 
 /**
- * @summary Create a new QA test run
+ * @summary Create a new live URL QA test run
  */
 export const useCreateQaRun = <
   TError = ErrorType<ErrorEnvelope>,
@@ -968,4 +970,169 @@ export const useDeleteQaRun = <
   TContext
 > => {
   return useMutation(getDeleteQaRunMutationOptions(options));
+};
+
+/**
+ * @summary Get aggregate stats for the authenticated user
+ */
+export const getGetQaStatsUrl = () => {
+  return `/api/qa/stats`;
+};
+
+export const getQaStats = async (options?: RequestInit): Promise<QaStats> => {
+  return customFetch<QaStats>(getGetQaStatsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetQaStatsQueryKey = () => {
+  return [`/api/qa/stats`] as const;
+};
+
+export const getGetQaStatsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getQaStats>>,
+  TError = ErrorType<ErrorEnvelope>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getQaStats>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetQaStatsQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getQaStats>>> = ({
+    signal,
+  }) => getQaStats({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getQaStats>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetQaStatsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getQaStats>>
+>;
+export type GetQaStatsQueryError = ErrorType<ErrorEnvelope>;
+
+/**
+ * @summary Get aggregate stats for the authenticated user
+ */
+
+export function useGetQaStats<
+  TData = Awaited<ReturnType<typeof getQaStats>>,
+  TError = ErrorType<ErrorEnvelope>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getQaStats>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetQaStatsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a SAST run by uploading source files
+ */
+export const getCreateSastRunUrl = () => {
+  return `/api/qa/sast`;
+};
+
+export const createSastRun = async (
+  createSastRunBody: CreateSastRunBody,
+  options?: RequestInit,
+): Promise<QaRun> => {
+  const formData = new FormData();
+  formData.append(`projectName`, createSastRunBody.projectName);
+  formData.append(`description`, createSastRunBody.description);
+  if (createSastRunBody.files !== undefined) {
+    createSastRunBody.files.forEach((value) => formData.append(`files`, value));
+  }
+
+  return customFetch<QaRun>(getCreateSastRunUrl(), {
+    ...options,
+    method: "POST",
+    body: formData,
+  });
+};
+
+export const getCreateSastRunMutationOptions = <
+  TError = ErrorType<ErrorEnvelope>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createSastRun>>,
+    TError,
+    { data: BodyType<CreateSastRunBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createSastRun>>,
+  TError,
+  { data: BodyType<CreateSastRunBody> },
+  TContext
+> => {
+  const mutationKey = ["createSastRun"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createSastRun>>,
+    { data: BodyType<CreateSastRunBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createSastRun(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateSastRunMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createSastRun>>
+>;
+export type CreateSastRunMutationBody = BodyType<CreateSastRunBody>;
+export type CreateSastRunMutationError = ErrorType<ErrorEnvelope>;
+
+/**
+ * @summary Create a SAST run by uploading source files
+ */
+export const useCreateSastRun = <
+  TError = ErrorType<ErrorEnvelope>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createSastRun>>,
+    TError,
+    { data: BodyType<CreateSastRunBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createSastRun>>,
+  TError,
+  { data: BodyType<CreateSastRunBody> },
+  TContext
+> => {
+  return useMutation(getCreateSastRunMutationOptions(options));
 };
