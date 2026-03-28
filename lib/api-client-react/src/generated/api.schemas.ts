@@ -8,3 +8,129 @@
 export interface HealthStatus {
   status: string;
 }
+
+export interface AuthUser {
+  id: string;
+  /** @nullable */
+  email: string | null;
+  /** @nullable */
+  firstName: string | null;
+  /** @nullable */
+  lastName: string | null;
+  /** @nullable */
+  profileImageUrl: string | null;
+}
+
+export interface AuthUserEnvelope {
+  user: AuthUser | null;
+}
+
+export interface MobileTokenExchangeRequest {
+  /** @minLength 1 */
+  code: string;
+  /** @minLength 1 */
+  code_verifier: string;
+  /** @minLength 1 */
+  redirect_uri: string;
+  /** @minLength 1 */
+  state: string;
+  /** @minLength 1 */
+  nonce?: string;
+}
+
+export interface MobileTokenExchangeSuccess {
+  token: string;
+}
+
+export const LogoutSuccessValue = {
+  success: true,
+} as const;
+export type LogoutSuccess = typeof LogoutSuccessValue;
+
+export interface ErrorEnvelope {
+  error: string;
+}
+
+export type QaIssueSeverity =
+  (typeof QaIssueSeverity)[keyof typeof QaIssueSeverity];
+
+export const QaIssueSeverity = {
+  low: "low",
+  medium: "medium",
+  high: "high",
+  critical: "critical",
+} as const;
+
+export interface QaIssue {
+  title: string;
+  description: string;
+  severity: QaIssueSeverity;
+  possibleCause: string;
+  suggestedFix: string;
+}
+
+export interface QaReport {
+  summary: string;
+  issues: QaIssue[];
+  /**
+   * @minimum 0
+   * @maximum 100
+   */
+  overallScore: number;
+  recommendations: string[];
+  /** @nullable */
+  screenshotBase64?: string | null;
+}
+
+export type QaRunStatus = (typeof QaRunStatus)[keyof typeof QaRunStatus];
+
+export const QaRunStatus = {
+  pending: "pending",
+  running: "running",
+  completed: "completed",
+  failed: "failed",
+} as const;
+
+export interface QaRun {
+  id: string;
+  userId: string;
+  appUrl: string;
+  appDescription: string;
+  status: QaRunStatus;
+  /** @nullable */
+  errorMessage?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type QaRunWithReport = QaRun & {
+  report?: QaReport | null;
+};
+
+export interface QaRunListResponse {
+  runs: QaRun[];
+}
+
+export interface CreateQaRunRequest {
+  appUrl: string;
+  /** @minLength 10 */
+  appDescription: string;
+}
+
+/**
+ * Opaque session token — `Bearer <sid>`.
+ */
+export type AuthorizationSessionHeaderParameter = string;
+
+export type BeginBrowserLoginParams = {
+  /**
+   * Relative path to redirect to after login (must start with `/`). Defaults to `/`.
+   */
+  returnTo?: string;
+};
+
+export type HandleBrowserLoginCallbackParams = {
+  code?: string;
+  state?: string;
+  iss?: string;
+};

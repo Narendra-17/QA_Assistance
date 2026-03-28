@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "AI QA Assistant"
+version = "1.0.0"
+id = "artifacts/qa-assistant"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 20693
+
+[services.development]
+run = "pnpm --filter @workspace/qa-assistant run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/qa-assistant", "run", "build" ]
+publicDir = "artifacts/qa-assistant/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "20693"
+BASE_PATH = "/"

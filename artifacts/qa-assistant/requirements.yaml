@@ -1,0 +1,13 @@
+packages:
+  "framer-motion": "Smooth page transitions and micro-interactions"
+  "recharts": "Data visualization for QA scores and metrics"
+  "date-fns": "Human-readable date formatting for test runs"
+
+images:
+  - path: "artifacts/qa-assistant/public/images/hero-bg.png"
+    description: "Abstract, modern dark tech background with glowing cyan and deep violet light trails. Very subtle grid or circuit patterns. Clean, professional, premium feel. Deep slate navy background."
+    aspect_ratio: "16:9"
+
+notes:
+  - Using @workspace/api-client-react for all API interactions
+  - Using @workspace/replit-auth-web for authentication state

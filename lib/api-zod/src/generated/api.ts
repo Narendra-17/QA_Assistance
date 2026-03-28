@@ -14,3 +14,175 @@ import * as zod from "zod";
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
 });
+
+/**
+ * @summary Get the currently authenticated user
+ */
+export const GetCurrentAuthUserHeader = zod.object({
+  Authorization: zod
+    .string()
+    .optional()
+    .describe("Opaque session token — `Bearer <sid>`."),
+});
+
+export const GetCurrentAuthUserResponse = zod.object({
+  user: zod.union([
+    zod.object({
+      id: zod.string(),
+      email: zod.string().email().nullable(),
+      firstName: zod.string().nullable(),
+      lastName: zod.string().nullable(),
+      profileImageUrl: zod.string().nullable(),
+    }),
+    zod.null(),
+  ]),
+});
+
+/**
+ * @summary Start the browser OIDC login flow
+ */
+export const BeginBrowserLoginQueryParams = zod.object({
+  returnTo: zod.coerce
+    .string()
+    .optional()
+    .describe(
+      "Relative path to redirect to after login (must start with `\/`). Defaults to `\/`.",
+    ),
+});
+
+/**
+ * @summary Complete the browser OIDC login flow
+ */
+export const HandleBrowserLoginCallbackQueryParams = zod.object({
+  code: zod.coerce.string().optional(),
+  state: zod.coerce.string().optional(),
+  iss: zod.coerce.string().url().optional(),
+});
+
+/**
+ * @summary Clear the session and begin OIDC logout
+ */
+export const LogoutBrowserSessionHeader = zod.object({
+  Authorization: zod
+    .string()
+    .optional()
+    .describe("Opaque session token — `Bearer <sid>`."),
+});
+
+/**
+ * @summary Exchange a mobile OIDC code for a session token
+ */
+
+export const ExchangeMobileAuthorizationCodeBody = zod.object({
+  code: zod.string().min(1),
+  code_verifier: zod.string().min(1),
+  redirect_uri: zod.string().url().min(1),
+  state: zod.string().min(1),
+  nonce: zod.string().min(1).optional(),
+});
+
+export const ExchangeMobileAuthorizationCodeResponse = zod.object({
+  token: zod.string(),
+});
+
+/**
+ * @summary Delete a mobile session token
+ */
+export const LogoutMobileSessionHeader = zod.object({
+  Authorization: zod
+    .string()
+    .optional()
+    .describe("Opaque session token — `Bearer <sid>`."),
+});
+
+export const LogoutMobileSessionResponse = zod.object({
+  success: zod.boolean(),
+});
+
+/**
+ * @summary List all QA runs for the authenticated user
+ */
+export const ListQaRunsResponse = zod.object({
+  runs: zod.array(
+    zod.object({
+      id: zod.string(),
+      userId: zod.string(),
+      appUrl: zod.string(),
+      appDescription: zod.string(),
+      status: zod.enum(["pending", "running", "completed", "failed"]),
+      errorMessage: zod.string().nullish(),
+      createdAt: zod.date(),
+      updatedAt: zod.date(),
+    }),
+  ),
+});
+
+/**
+ * @summary Create a new QA test run
+ */
+export const createQaRunBodyAppDescriptionMin = 10;
+
+export const CreateQaRunBody = zod.object({
+  appUrl: zod.string().url(),
+  appDescription: zod.string().min(createQaRunBodyAppDescriptionMin),
+});
+
+/**
+ * @summary Get a specific QA run with its report
+ */
+export const GetQaRunParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const getQaRunResponseTwoReportOneOverallScoreMin = 0;
+export const getQaRunResponseTwoReportOneOverallScoreMax = 100;
+
+export const GetQaRunResponse = zod
+  .object({
+    id: zod.string(),
+    userId: zod.string(),
+    appUrl: zod.string(),
+    appDescription: zod.string(),
+    status: zod.enum(["pending", "running", "completed", "failed"]),
+    errorMessage: zod.string().nullish(),
+    createdAt: zod.date(),
+    updatedAt: zod.date(),
+  })
+  .and(
+    zod.object({
+      report: zod
+        .union([
+          zod.object({
+            summary: zod.string(),
+            issues: zod.array(
+              zod.object({
+                title: zod.string(),
+                description: zod.string(),
+                severity: zod.enum(["low", "medium", "high", "critical"]),
+                possibleCause: zod.string(),
+                suggestedFix: zod.string(),
+              }),
+            ),
+            overallScore: zod
+              .number()
+              .min(getQaRunResponseTwoReportOneOverallScoreMin)
+              .max(getQaRunResponseTwoReportOneOverallScoreMax),
+            recommendations: zod.array(zod.string()),
+            screenshotBase64: zod.string().nullish(),
+          }),
+          zod.null(),
+        ])
+        .optional(),
+    }),
+  );
+
+/**
+ * @summary Delete a QA run
+ */
+export const DeleteQaRunParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const DeleteQaRunResponse = zod.object({
+  success: zod.boolean(),
+});
