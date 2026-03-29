@@ -13,6 +13,14 @@ import Dashboard from "@/pages/dashboard";
 import NewRun from "@/pages/new-run";
 import Report from "@/pages/report";
 
+function UrlTestPage() {
+  return <NewRun initialTab="url" />;
+}
+
+function SastPage() {
+  return <NewRun initialTab="sast" />;
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -71,10 +79,8 @@ function ProtectedRouter() {
     <MainLayout>
       <Switch>
         <Route path="/" component={Dashboard} />
-        <Route path="/new" component={NewRun} />
-        <Route path="/sast">
-          {() => <NewRun initialTab="sast" />}
-        </Route>
+        <Route path="/new" component={UrlTestPage} />
+        <Route path="/sast" component={SastPage} />
         <Route path="/runs/:id" component={Report} />
         <Route component={NotFound} />
       </Switch>

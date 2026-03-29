@@ -3,18 +3,18 @@ import { Link } from "wouter";
 import { format } from "date-fns";
 import { Plus, Trash2, ExternalLink, Globe, FileCode2, AlertTriangle, TrendingUp, Activity, CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, type Variants } from "framer-motion";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { StatusBadge } from "@/components/status-badge";
 import { useGetQaStats } from "@workspace/api-client-react";
 
-const CONTAINER = {
+const CONTAINER: Variants = {
   hidden: { opacity: 0 },
   show: { opacity: 1, transition: { staggerChildren: 0.06 } },
 };
-const ITEM = {
+const ITEM: Variants = {
   hidden: { opacity: 0, y: 16 },
   show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 280 } },
 };

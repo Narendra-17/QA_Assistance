@@ -25,9 +25,9 @@ const sastSchema = z.object({
 type UrlForm = z.infer<typeof urlSchema>;
 type SastForm = z.infer<typeof sastSchema>;
 
-export default function NewRun({ initialTab }: { initialTab?: "url" | "sast" } = {}) {
+export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "sast" }) {
   const [, setLocation] = useLocation();
-  const [tab, setTab] = useState<"url" | "sast">(initialTab ?? "url");
+  const [tab, setTab] = useState<"url" | "sast">(initialTab);
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [sastLoading, setSastLoading] = useState(false);
@@ -47,8 +47,8 @@ export default function NewRun({ initialTab }: { initialTab?: "url" | "sast" } =
     createMutation.mutate({ data: values });
   }
 
-  async function onSastSubmit(values: SastForm) {
-    if (!files.length) return toast.error("Please upload at least one source code file");
+  async function onSastSubmit(values: SastForm): Promise<void> {
+    if (!files.length) { toast.error("Please upload at least one source code file"); return; }
     setSastLoading(true);
     try {
       const fd = new FormData();

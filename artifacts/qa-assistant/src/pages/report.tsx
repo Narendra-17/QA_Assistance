@@ -98,13 +98,9 @@ export default function Report() {
   const [filterSev, setFilterSev] = useState<"all" | "critical" | "high" | "medium" | "low">("all");
   const [expandedIssue, setExpandedIssue] = useState<number | null>(null);
 
-  const { data: run, isLoading } = useGetQaRun(id!, {
-    query: {
-      refetchInterval: (q) => {
-        const status = (q.state.data as RunData | undefined)?.status;
-        return pollingEnabled && (status === "running" || status === "pending") ? 3000 : false;
-      },
-    },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: run, isLoading } = (useGetQaRun as any)(id!, {
+    query: { refetchInterval: pollingEnabled ? 3000 : false },
   }) as { data: RunData | undefined; isLoading: boolean };
 
   useEffect(() => {

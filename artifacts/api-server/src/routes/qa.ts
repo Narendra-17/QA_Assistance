@@ -2,17 +2,12 @@ import { Router, type Request, type Response } from "express";
 import { db } from "@workspace/db";
 import { qaRunsTable } from "@workspace/db/schema";
 import { eq, and, desc } from "drizzle-orm";
-import { z } from "zod/v4";
-import OpenAI from "openai";
+import { z } from "zod";
+import { openai } from "@workspace/integrations-openai-ai-server";
 import multer from "multer";
 import path from "path";
 
 const router = Router();
-
-const openai = new OpenAI({
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-});
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -218,7 +213,7 @@ router.post("/runs", async (req: Request, res: Response) => {
   if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
   const userId = (req.user as { id: string }).id;
 
-  const parsed = z.object({ appUrl: z.url(), appDescription: z.string().min(10) }).safeParse(req.body);
+  const parsed = z.object({ appUrl: z.string().url(), appDescription: z.string().min(10) }).safeParse(req.body);
   if (!parsed.success) return void res.status(400).json({ error: "Invalid request" });
 
   const { appUrl, appDescription } = parsed.data;
