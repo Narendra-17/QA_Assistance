@@ -35,11 +35,50 @@ const CHECKS = [
 const SAST_CHECKS = [
   { label: "SQL injection" },
   { label: "Hardcoded secrets" },
+  { label: "IaC misconfigurations" },
   { label: "Insecure dependencies" },
-  { label: "Logic vulnerabilities" },
+  { label: "Shell script risks" },
+  { label: "Container security" },
 ];
 
-const CODE_TYPES = ".ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.java,.kt,.cs,.go,.rb,.php,.c,.cpp,.h,.rs,.html,.vue,.svelte,.json,.yaml,.yml,.env,.sql,.sh,.toml,.graphql,.md";
+const CODE_TYPES = [
+  // JS / TS
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".cts", ".mts",
+  // Python
+  ".py", ".pyw", ".pyi",
+  // JVM
+  ".java", ".kt", ".kts", ".groovy", ".scala",
+  // .NET
+  ".cs", ".vb", ".fs", ".fsx",
+  // Go / Rust / C family
+  ".go", ".rs", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp",
+  // Ruby / PHP / Perl / Lua
+  ".rb", ".rake", ".php", ".phtml", ".pl", ".pm", ".lua",
+  // Mobile
+  ".swift", ".m", ".mm", ".dart",
+  // Functional
+  ".hs", ".ex", ".exs", ".erl", ".r",
+  // Shell / scripting
+  ".sh", ".bash", ".zsh", ".fish", ".ps1", ".psm1", ".psd1", ".bat", ".cmd",
+  // Web / templates
+  ".html", ".htm", ".vue", ".svelte",
+  ".css", ".scss", ".sass", ".less",
+  ".twig", ".ejs", ".hbs", ".mustache", ".pug",
+  // Markup & data
+  ".xml", ".xsl", ".svg",
+  ".json", ".jsonc",
+  ".yaml", ".yml",
+  ".toml", ".ini", ".cfg", ".conf", ".properties",
+  ".env",
+  // SQL / GraphQL
+  ".sql", ".prisma", ".graphql", ".gql",
+  // IaC
+  ".tf", ".tfvars", ".hcl", ".bicep",
+  // Build
+  ".gradle",
+  // Other
+  ".md", ".mdx", ".proto", ".zig", ".lock", ".mod",
+].join(",");
 
 export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "sast" }) {
   const [, setLocation] = useLocation();
@@ -284,8 +323,9 @@ export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "s
                           {isDragging ? "Release to upload" : "Drop files or click to browse"}
                         </p>
                         <p className="text-zinc-500 text-xs mt-1">
-                          .ts .js .py .java .go .php .rs .html .env .json .yaml · Max 5MB · Up to 30 files
+                          Source code · Shell scripts · IaC (.tf/.hcl) · Dockerfiles · Config files · and more
                         </p>
+                        <p className="text-zinc-600 text-[10px] mt-0.5">Max 5 MB per file · Up to 30 files</p>
                       </div>
                     </div>
 

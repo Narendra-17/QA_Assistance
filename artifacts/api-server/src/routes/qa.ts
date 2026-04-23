@@ -17,18 +17,94 @@ const upload = multer({
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 const CODE_EXTS = new Set([
-  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
-  ".py", ".java", ".kt", ".cs", ".go", ".rb", ".php",
-  ".c", ".cpp", ".h", ".hpp", ".rs",
-  ".html", ".vue", ".svelte",
-  ".env", ".env.example", ".json", ".yaml", ".yml",
-  ".toml", ".sh", ".bash", ".sql", ".graphql",
+  // JavaScript / TypeScript ecosystem
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".cts", ".mts",
+
+  // Python
+  ".py", ".pyw", ".pyi",
+
+  // JVM languages
+  ".java", ".kt", ".kts", ".groovy", ".scala", ".clj", ".cljs",
+
+  // .NET / Microsoft
+  ".cs", ".vb", ".fs", ".fsx", ".csx",
+
+  // Go, Rust, C family
+  ".go", ".rs", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh",
+
+  // Ruby, PHP, Perl, Lua
+  ".rb", ".rake", ".php", ".phtml", ".pl", ".pm", ".lua",
+
+  // Mobile
+  ".swift", ".m", ".mm", ".dart",
+
+  // Functional / other
+  ".hs", ".lhs", ".ex", ".exs", ".erl", ".hrl", ".r",
+
+  // Shell / scripting
+  ".sh", ".bash", ".zsh", ".fish", ".ps1", ".psm1", ".psd1", ".bat", ".cmd",
+
+  // Web / templates
+  ".html", ".htm", ".vue", ".svelte", ".tsx",
+  ".css", ".scss", ".sass", ".less",
+  ".twig", ".ejs", ".hbs", ".mustache", ".pug", ".jade", ".jinja", ".j2",
+
+  // Markup & data
+  ".xml", ".xsl", ".xslt", ".svg",
+  ".json", ".jsonc", ".json5",
+  ".yaml", ".yml",
+  ".toml",
+  ".ini", ".cfg", ".conf", ".config", ".properties",
+  ".env", ".env.example", ".env.local", ".env.production",
+
+  // SQL & data
+  ".sql", ".prisma", ".graphql", ".gql",
+
+  // Infrastructure as Code
+  ".tf", ".tfvars", ".hcl",         // Terraform / HashiCorp
+  ".bicep",                          // Azure Bicep
+
+  // Build & packaging
+  ".gradle", ".kts",
+  ".lock", ".mod", ".sum",           // Go modules, lockfiles
+  ".gemspec", ".podspec",
+
+  // Other dev files
+  ".md", ".mdx",
+  ".proto",                          // Protocol Buffers
+  ".thrift",                         // Apache Thrift
+  ".zig",                            // Zig
+]);
+
+/** Named files that carry no extension but are always relevant */
+const CODE_BASENAMES = new Set([
+  "dockerfile", "containerfile",
+  "makefile", "gnumakefile", "rakefile", "gemfile", "podfile",
+  "vagrantfile", "jenkinsfile", "fastfile", "brewfile",
+  "cmakelists.txt", "build.gradle", "pom.xml", "build.sbt",
+  "requirements.txt", "pipfile", "pyproject.toml",
+  "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+  "cargo.toml", "cargo.lock",
+  "go.mod", "go.sum",
+  ".npmrc", ".nvmrc", ".yarnrc", ".yarnrc.yml",
+  ".babelrc", ".eslintrc", ".prettierrc", ".stylelintrc",
+  ".editorconfig", ".gitignore", ".dockerignore",
+  ".htaccess", ".nginx.conf", "nginx.conf",
+  "serverless.yml", "serverless.yaml",
+  "docker-compose.yml", "docker-compose.yaml",
+  "kubernetes.yaml", "k8s.yaml",
 ]);
 
 function isCodeFile(filename: string): boolean {
   const ext = path.extname(filename).toLowerCase();
   const base = path.basename(filename).toLowerCase();
-  return CODE_EXTS.has(ext) || base === "dockerfile" || base === ".env";
+  // Strip leading dot for basename comparison
+  const bareBase = base.startsWith(".") ? base.slice(1) : base;
+  return (
+    CODE_EXTS.has(ext) ||
+    CODE_BASENAMES.has(base) ||
+    CODE_BASENAMES.has(bareBase)
+  );
 }
 
 async function analyzeUrl(appUrl: string, appDescription: string): Promise<Record<string, unknown>> {
@@ -122,13 +198,28 @@ async function analyzeCode(files: Array<{ name: string; content: string }>, proj
     .map(f => `### ${f.name}\n\`\`\`\n${f.content.slice(0, 2500)}\n\`\`\``)
     .join("\n\n");
 
-  const prompt = `You are a senior security engineer performing Static Application Security Testing (SAST). Analyze the source code for security vulnerabilities, code quality issues, and best-practice violations.
+  const fileTypes = [...new Set(files.map(f => path.extname(f.name).toLowerCase() || f.name.toLowerCase()))].join(", ");
+
+  const prompt = `You are a senior security engineer and code auditor performing Static Application Security Testing (SAST). Analyze ALL provided files for security vulnerabilities, misconfigurations, and best-practice violations — adapting your checks to the file types present.
 
 Project: ${projectName}
 Description: ${description}
-Files analyzed: ${files.length}
+Files analyzed: ${files.length} (${fileTypes})
 
 ${filesSummary}
+
+ANALYSIS RULES BY FILE TYPE:
+- Source code (.ts/.js/.py/.java/.go/.cs/.rb/.php/.swift/.rs/etc.): SQL injection, XSS, hardcoded credentials, insecure deserialization, broken auth, CSRF, path traversal, command injection, prototype pollution, insecure crypto, missing input validation, debug code left in production, open redirects, IDOR, race conditions
+- Shell scripts (.sh/.bash/.zsh/.ps1/.bat/.cmd): Command injection, unquoted variables, unsafe eval/exec, world-writable files, privilege escalation, unsafe use of sudo, sensitive data in arguments, missing error handling
+- Markup & templates (.html/.ejs/.hbs/.twig/.pug): XSS via unescaped output, unsafe innerHTML, CSRF token absence, clickjacking, mixed content, insecure resource loading
+- CSS/SCSS/LESS (.css/.scss/.sass/.less): CSS injection, data exfiltration via CSS, use of unsafe external fonts/resources
+- Config & environment (.env/.ini/.cfg/.properties/.yaml/.yml): Hardcoded secrets/API keys/passwords, debug mode enabled in production, overly permissive CORS, insecure defaults, sensitive data committed
+- Infrastructure as Code (.tf/.tfvars/.hcl/.bicep): Exposed cloud credentials, overly permissive IAM policies, public S3 buckets or storage, unencrypted data stores, open security groups (0.0.0.0/0), missing audit logging, no MFA enforcement, privileged containers, host path mounts
+- Kubernetes & Docker (*.yaml k8s manifests, Dockerfile, docker-compose.yml): Privileged containers, running as root, exposed ports, no resource limits, hardcoded secrets in env vars, use of latest tag, insecure base images, no read-only root filesystem, no network policies, RBAC misconfigurations
+- Build & dependency files (package.json, requirements.txt, Gemfile, pom.xml, go.mod, Cargo.toml, gradle): Known vulnerable dependency versions, dependency confusion attacks, unpinned versions, suspicious packages, overly broad permissions, exposed registry tokens
+- Makefile / Rakefile / Jenkinsfile / CI configs: Command injection in build steps, exposed secrets in CI env, insecure artifact storage, missing SAST/DAST steps, insecure remote fetching
+- Database (.sql/.prisma): SQL injection patterns, missing parameterized queries, unencrypted PII, over-privileged roles, missing row-level security
+- Protocol buffers / Thrift (.proto/.thrift): Missing field validation, overly permissive schemas, sensitive data without encryption annotations
 
 Respond with ONLY valid JSON:
 {
@@ -139,18 +230,18 @@ Respond with ONLY valid JSON:
       "description": "Detailed explanation",
       "severity": "critical|high|medium|low",
       "possibleCause": "Root cause or anti-pattern",
-      "suggestedFix": "Concrete fix with example code snippet",
-      "codeSnippet": "Relevant vulnerable code (or null)",
+      "suggestedFix": "Concrete actionable fix with code example where relevant",
+      "codeSnippet": "Relevant vulnerable code or config snippet (or null)",
       "filePath": "path/to/file.ext or null",
       "lineNumber": null
     }
   ],
   "overallScore": <0-100>,
-  "recommendations": ["Strategic recommendation 1"],
+  "recommendations": ["Strategic recommendation 1", "Strategic recommendation 2"],
   "testType": "sast"
 }
 
-Check for: SQL injection, XSS, hardcoded secrets/API keys, insecure deps, CSRF, path traversal, insecure deserialization, broken auth, sensitive data exposure, XXE, IDOR, open redirect, command injection, weak crypto, missing input validation, debug code in prod, missing rate limiting, insecure CORS, prototype pollution. Score = 100 - (critical×25 + high×12 + medium×5 + low×2), min 0. Sort by severity desc.`;
+Score = 100 - (critical×25 + high×12 + medium×5 + low×2), minimum 0. Include 4-12 issues. Sort by severity descending.`;
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
