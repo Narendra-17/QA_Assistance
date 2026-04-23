@@ -167,46 +167,60 @@ Check for: SQL injection, XSS, hardcoded secrets/API keys, insecure deps, CSRF, 
 router.get("/runs", async (req: Request, res: Response) => {
   if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
   const userId = (req.user as { id: string }).id;
-  const runs = await db
-    .select({
-      id: qaRunsTable.id, userId: qaRunsTable.userId, runType: qaRunsTable.runType,
-      appUrl: qaRunsTable.appUrl, appDescription: qaRunsTable.appDescription,
-      projectName: qaRunsTable.projectName, status: qaRunsTable.status,
-      errorMessage: qaRunsTable.errorMessage, createdAt: qaRunsTable.createdAt,
-      updatedAt: qaRunsTable.updatedAt,
-    })
-    .from(qaRunsTable)
-    .where(eq(qaRunsTable.userId, userId))
-    .orderBy(desc(qaRunsTable.createdAt));
-  res.json({ runs });
+  try {
+    const runs = await db
+      .select({
+        id: qaRunsTable.id, userId: qaRunsTable.userId, runType: qaRunsTable.runType,
+        appUrl: qaRunsTable.appUrl, appDescription: qaRunsTable.appDescription,
+        projectName: qaRunsTable.projectName, status: qaRunsTable.status,
+        errorMessage: qaRunsTable.errorMessage, createdAt: qaRunsTable.createdAt,
+        updatedAt: qaRunsTable.updatedAt,
+      })
+      .from(qaRunsTable)
+      .where(eq(qaRunsTable.userId, userId))
+      .orderBy(desc(qaRunsTable.createdAt));
+    res.json({ runs });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch runs" });
+  }
 });
 
 router.get("/stats", async (req: Request, res: Response) => {
   if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
   const userId = (req.user as { id: string }).id;
-  const runs = await db.select().from(qaRunsTable).where(eq(qaRunsTable.userId, userId));
+  try {
+    const runs = await db
+      .select({
+        id: qaRunsTable.id, runType: qaRunsTable.runType, status: qaRunsTable.status,
+        report: qaRunsTable.report,
+      })
+      .from(qaRunsTable)
+      .where(eq(qaRunsTable.userId, userId));
 
-  const completed = runs.filter(r => r.status === "completed");
-  let totalScore = 0, criticalIssues = 0, highIssues = 0;
-  for (const r of completed) {
-    const report = r.report as Record<string, unknown> | null;
-    if (report) {
-      totalScore += Number(report.overallScore ?? 0);
-      const issues = (report.issues as Array<{ severity: string }>) ?? [];
-      criticalIssues += issues.filter(i => i.severity === "critical").length;
-      highIssues += issues.filter(i => i.severity === "high").length;
+    const completed = runs.filter(r => r.status === "completed");
+    let totalScore = 0, criticalIssues = 0, highIssues = 0;
+    for (const r of completed) {
+      const report = r.report as Record<string, unknown> | null;
+      if (report) {
+        totalScore += Number(report.overallScore ?? 0);
+        const issues = (report.issues as Array<{ severity: string }>) ?? [];
+        criticalIssues += issues.filter(i => i.severity === "critical").length;
+        highIssues += issues.filter(i => i.severity === "high").length;
+      }
     }
-  }
 
-  res.json({
-    totalRuns: runs.length,
-    completedRuns: completed.length,
-    failedRuns: runs.filter(r => r.status === "failed").length,
-    averageScore: completed.length > 0 ? Math.round(totalScore / completed.length) : 0,
-    criticalIssues, highIssues,
-    urlRuns: runs.filter(r => r.runType === "url").length,
-    sastRuns: runs.filter(r => r.runType === "sast").length,
-  });
+    res.json({
+      totalRuns: runs.length,
+      completedRuns: completed.length,
+      failedRuns: runs.filter(r => r.status === "failed").length,
+      averageScore: completed.length > 0 ? Math.round(totalScore / completed.length) : 0,
+      criticalIssues, highIssues,
+      urlRuns: runs.filter(r => r.runType === "url").length,
+      sastRuns: runs.filter(r => r.runType === "sast").length,
+    });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch stats" });
+  }
 });
 
 router.post("/runs", async (req: Request, res: Response) => {
@@ -214,18 +228,22 @@ router.post("/runs", async (req: Request, res: Response) => {
   const userId = (req.user as { id: string }).id;
 
   const parsed = z.object({ appUrl: z.string().url(), appDescription: z.string().min(10) }).safeParse(req.body);
-  if (!parsed.success) return void res.status(400).json({ error: "Invalid request" });
+  if (!parsed.success) return void res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
 
   const { appUrl, appDescription } = parsed.data;
-  const [run] = await db.insert(qaRunsTable).values({ userId, runType: "url", appUrl, appDescription, status: "running" }).returning();
-  res.status(201).json(run);
+  try {
+    const [run] = await db.insert(qaRunsTable).values({ userId, runType: "url", appUrl, appDescription, status: "running" }).returning();
+    res.status(201).json(run);
 
-  analyzeUrl(appUrl, appDescription)
-    .then(report => db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, run.id)))
-    .catch(async (err) => {
-      const msg = err instanceof Error ? err.message : "Analysis failed";
-      await db.update(qaRunsTable).set({ status: "failed", errorMessage: msg }).where(eq(qaRunsTable.id, run.id));
-    });
+    analyzeUrl(appUrl, appDescription)
+      .then(report => db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, run.id)))
+      .catch(async (err) => {
+        const msg = err instanceof Error ? err.message : "Analysis failed";
+        await db.update(qaRunsTable).set({ status: "failed", errorMessage: msg }).where(eq(qaRunsTable.id, run.id));
+      });
+  } catch {
+    res.status(500).json({ error: "Failed to create run" });
+  }
 });
 
 router.post("/sast", upload.array("files", 30), async (req: Request, res: Response) => {
@@ -233,7 +251,7 @@ router.post("/sast", upload.array("files", 30), async (req: Request, res: Respon
   const userId = (req.user as { id: string }).id;
 
   const parsed = z.object({ projectName: z.string().min(1), description: z.string().min(5) }).safeParse(req.body);
-  if (!parsed.success) return void res.status(400).json({ error: "Invalid request" });
+  if (!parsed.success) return void res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
 
   const { projectName, description } = parsed.data;
   const uploadedFiles = req.files as Express.Multer.File[];
@@ -246,31 +264,43 @@ router.post("/sast", upload.array("files", 30), async (req: Request, res: Respon
 
   if (!codeFiles.length) return void res.status(400).json({ error: "No readable code files found. Please upload source code files." });
 
-  const [run] = await db.insert(qaRunsTable).values({ userId, runType: "sast", projectName, appDescription: description, status: "running" }).returning();
-  res.status(201).json(run);
+  try {
+    const [run] = await db.insert(qaRunsTable).values({ userId, runType: "sast", projectName, appDescription: description, status: "running" }).returning();
+    res.status(201).json(run);
 
-  analyzeCode(codeFiles, projectName, description)
-    .then(report => db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, run.id)))
-    .catch(async (err) => {
-      const msg = err instanceof Error ? err.message : "Analysis failed";
-      await db.update(qaRunsTable).set({ status: "failed", errorMessage: msg }).where(eq(qaRunsTable.id, run.id));
-    });
+    analyzeCode(codeFiles, projectName, description)
+      .then(report => db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, run.id)))
+      .catch(async (err) => {
+        const msg = err instanceof Error ? err.message : "Analysis failed";
+        await db.update(qaRunsTable).set({ status: "failed", errorMessage: msg }).where(eq(qaRunsTable.id, run.id));
+      });
+  } catch {
+    res.status(500).json({ error: "Failed to create SAST run" });
+  }
 });
 
 router.get("/runs/:id", async (req: Request, res: Response) => {
   if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
   const userId = (req.user as { id: string }).id;
-  const [run] = await db.select().from(qaRunsTable).where(and(eq(qaRunsTable.id, req.params.id), eq(qaRunsTable.userId, userId)));
-  if (!run) return void res.status(404).json({ error: "Not found" });
-  res.json(run);
+  try {
+    const [run] = await db.select().from(qaRunsTable).where(and(eq(qaRunsTable.id, String(req.params.id)), eq(qaRunsTable.userId, userId)));
+    if (!run) return void res.status(404).json({ error: "Not found" });
+    res.json(run);
+  } catch {
+    res.status(500).json({ error: "Failed to fetch run" });
+  }
 });
 
 router.delete("/runs/:id", async (req: Request, res: Response) => {
   if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
   const userId = (req.user as { id: string }).id;
-  const [deleted] = await db.delete(qaRunsTable).where(and(eq(qaRunsTable.id, req.params.id), eq(qaRunsTable.userId, userId))).returning();
-  if (!deleted) return void res.status(404).json({ error: "Not found" });
-  res.json({ success: true as const });
+  try {
+    const [deleted] = await db.delete(qaRunsTable).where(and(eq(qaRunsTable.id, String(req.params.id)), eq(qaRunsTable.userId, userId))).returning();
+    if (!deleted) return void res.status(404).json({ error: "Not found" });
+    res.json({ success: true as const });
+  } catch {
+    res.status(500).json({ error: "Failed to delete run" });
+  }
 });
 
 export default router;

@@ -7,6 +7,6 @@ const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(authRouter);
-router.use(qaRouter);
+router.use("/qa", qaRouter);
 
 export default router;

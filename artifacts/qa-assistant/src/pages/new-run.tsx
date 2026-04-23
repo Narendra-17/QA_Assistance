@@ -1,4 +1,4 @@
-import { useCreateQaRun } from "@workspace/api-client-react";
+import { useCreateQaRun, useCreateSastRun } from "@workspace/api-client-react";
 import { useLocation } from "wouter";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
@@ -30,7 +30,6 @@ export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "s
   const [tab, setTab] = useState<"url" | "sast">(initialTab);
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
-  const [sastLoading, setSastLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const urlForm = useForm<UrlForm>({ resolver: zodResolver(urlSchema), defaultValues: { appUrl: "", appDescription: "" } });
@@ -43,33 +42,23 @@ export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "s
     },
   });
 
+  const sastMutation = useCreateSastRun({
+    mutation: {
+      onSuccess: (data) => { toast.success("SAST scan started!"); setLocation(`/runs/${data.id}`); },
+      onError: (err) => {
+        const msg = err instanceof Error ? err.message : "Upload failed";
+        toast.error(msg);
+      },
+    },
+  });
+
   function onUrlSubmit(values: UrlForm) {
     createMutation.mutate({ data: values });
   }
 
-  async function onSastSubmit(values: SastForm): Promise<void> {
+  function onSastSubmit(values: SastForm) {
     if (!files.length) { toast.error("Please upload at least one source code file"); return; }
-    setSastLoading(true);
-    try {
-      const fd = new FormData();
-      fd.append("projectName", values.projectName);
-      fd.append("description", values.description);
-      files.forEach(f => fd.append("files", f, f.webkitRelativePath || f.name));
-
-      const base = (import.meta.env.BASE_URL as string).replace(/\/$/, "");
-      const resp = await fetch(`${base}/api/qa/sast`, { method: "POST", body: fd, credentials: "include" });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ error: "Upload failed" }));
-        throw new Error(err.error ?? "Upload failed");
-      }
-      const run = await resp.json() as { id: string };
-      toast.success("SAST scan started!");
-      setLocation(`/runs/${run.id}`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setSastLoading(false);
-    }
+    sastMutation.mutate({ data: { projectName: values.projectName, description: values.description, files } });
   }
 
   const addFiles = useCallback((newFiles: FileList | File[]) => {
@@ -259,9 +248,9 @@ export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "s
                       </div>
                     )}
 
-                    <Button type="submit" disabled={sastLoading || files.length === 0}
+                    <Button type="submit" disabled={sastMutation.isPending || files.length === 0}
                       className="w-full h-12 rounded-xl bg-gradient-to-r from-cyan-600 to-teal-500 hover:from-cyan-500 hover:to-teal-400 text-white font-semibold shadow-lg shadow-cyan-900/30 transition-all disabled:opacity-50">
-                      {sastLoading ? "Uploading & analyzing…" : `Scan ${files.length > 0 ? files.length + " file" + (files.length > 1 ? "s" : "") : "files"} →`}
+                      {sastMutation.isPending ? "Uploading & analyzing…" : `Scan ${files.length > 0 ? files.length + " file" + (files.length > 1 ? "s" : "") : "files"} →`}
                     </Button>
                   </form>
                 </Form>

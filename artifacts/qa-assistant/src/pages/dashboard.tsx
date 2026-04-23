@@ -1,4 +1,4 @@
-import { useListQaRuns, useDeleteQaRun, getListQaRunsQueryKey } from "@workspace/api-client-react";
+import { useListQaRuns, useDeleteQaRun, getListQaRunsQueryKey, getGetQaStatsQueryKey } from "@workspace/api-client-react";
 import { Link } from "wouter";
 import { format } from "date-fns";
 import { Plus, Trash2, ExternalLink, Globe, FileCode2, AlertTriangle, TrendingUp, Activity, CheckCircle2, XCircle } from "lucide-react";
@@ -55,6 +55,7 @@ export default function Dashboard() {
     deleteMutation.mutate({ id }, {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: getListQaRunsQueryKey() });
+        queryClient.invalidateQueries({ queryKey: getGetQaStatsQueryKey() });
         toast.success("Test run deleted");
       },
       onError: () => toast.error("Failed to delete"),
