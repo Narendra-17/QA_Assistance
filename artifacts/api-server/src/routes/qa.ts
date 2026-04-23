@@ -6,15 +6,28 @@ import { z } from "zod";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import multer from "multer";
 import path from "path";
+import {
+  assertSafeUrl,
+  sanitizeAndLimit,
+  sanitizeFilename,
+  isBinaryBuffer,
+  isValidUuid,
+  safeErrorMessage,
+  SecurityError,
+  logSecurityEvent,
+} from "../lib/security";
 
 const router = Router();
 
+// ─── Upload config ───────────────────────────────────────────────────────────
+// Individual file limit: 5 MB
+// Total upload limit: 50 MB for 30 files
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 30 },
+  limits: { fileSize: 5 * 1024 * 1024, files: 30, fieldSize: 1 * 1024 * 1024 },
 });
 
-// ─── helpers ────────────────────────────────────────────────────────────────
+// ─── Allowed file types ──────────────────────────────────────────────────────
 
 const CODE_EXTS = new Set([
   // JavaScript / TypeScript ecosystem
@@ -45,7 +58,7 @@ const CODE_EXTS = new Set([
   ".sh", ".bash", ".zsh", ".fish", ".ps1", ".psm1", ".psd1", ".bat", ".cmd",
 
   // Web / templates
-  ".html", ".htm", ".vue", ".svelte", ".tsx",
+  ".html", ".htm", ".vue", ".svelte",
   ".css", ".scss", ".sass", ".less",
   ".twig", ".ejs", ".hbs", ".mustache", ".pug", ".jade", ".jinja", ".j2",
 
@@ -61,19 +74,19 @@ const CODE_EXTS = new Set([
   ".sql", ".prisma", ".graphql", ".gql",
 
   // Infrastructure as Code
-  ".tf", ".tfvars", ".hcl",         // Terraform / HashiCorp
-  ".bicep",                          // Azure Bicep
+  ".tf", ".tfvars", ".hcl",
+  ".bicep",
 
   // Build & packaging
-  ".gradle", ".kts",
-  ".lock", ".mod", ".sum",           // Go modules, lockfiles
+  ".gradle",
+  ".lock", ".mod", ".sum",
   ".gemspec", ".podspec",
 
   // Other dev files
   ".md", ".mdx",
-  ".proto",                          // Protocol Buffers
-  ".thrift",                         // Apache Thrift
-  ".zig",                            // Zig
+  ".proto",
+  ".thrift",
+  ".zig",
 ]);
 
 /** Named files that carry no extension but are always relevant */
@@ -98,7 +111,6 @@ const CODE_BASENAMES = new Set([
 function isCodeFile(filename: string): boolean {
   const ext = path.extname(filename).toLowerCase();
   const base = path.basename(filename).toLowerCase();
-  // Strip leading dot for basename comparison
   const bareBase = base.startsWith(".") ? base.slice(1) : base;
   return (
     CODE_EXTS.has(ext) ||
@@ -107,7 +119,12 @@ function isCodeFile(filename: string): boolean {
   );
 }
 
-async function analyzeUrl(appUrl: string, appDescription: string): Promise<Record<string, unknown>> {
+// ─── Analysis helpers ────────────────────────────────────────────────────────
+
+async function analyzeUrl(
+  appUrl: string,
+  appDescription: string,
+): Promise<Record<string, unknown>> {
   let pageContent = "";
   const securityHeaders: Record<string, string | null> = {
     "strict-transport-security": null,
@@ -121,10 +138,11 @@ async function analyzeUrl(appUrl: string, appDescription: string): Promise<Recor
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    const timeout = setTimeout(() => controller.abort(), 15_000);
     const resp = await fetch(appUrl, {
       signal: controller.signal,
-      headers: { "User-Agent": "QAAssistant/1.0" },
+      headers: { "User-Agent": "QAAssistant/1.0 (security-scanner)" },
+      redirect: "follow",
     });
     clearTimeout(timeout);
 
@@ -140,12 +158,11 @@ async function analyzeUrl(appUrl: string, appDescription: string): Promise<Recor
     const inputs = (html.match(/<input/gi) ?? []).length;
     const scripts = (html.match(/<script/gi) ?? []).length;
     const metaTags = [...html.matchAll(/<meta[^>]+>/gi)].slice(0, 5).map(m => m[0].slice(0, 200));
-    const hasHttps = appUrl.startsWith("https://");
 
     pageContent = JSON.stringify({
       url: appUrl,
       statusCode: resp.status,
-      isHttps: hasHttps,
+      isHttps: appUrl.startsWith("https://"),
       title, headings, formCount: forms, linkCount: links,
       inputCount: inputs, scriptCount: scripts, securityHeaders, metaTags,
     });
@@ -187,12 +204,17 @@ Rules: If fetch failed, base analysis on URL and description. Score = 100 - (cri
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
     temperature: 0.3,
+    max_tokens: 4096,
   });
 
   return JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
 }
 
-async function analyzeCode(files: Array<{ name: string; content: string }>, projectName: string, description: string): Promise<Record<string, unknown>> {
+async function analyzeCode(
+  files: Array<{ name: string; content: string }>,
+  projectName: string,
+  description: string,
+): Promise<Record<string, unknown>> {
   const filesSummary = files
     .slice(0, 25)
     .map(f => `### ${f.name}\n\`\`\`\n${f.content.slice(0, 2500)}\n\`\`\``)
@@ -248,15 +270,31 @@ Score = 100 - (critical×25 + high×12 + medium×5 + low×2), minimum 0. Include
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
     temperature: 0.2,
+    max_tokens: 4096,
   });
 
   return JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
 }
 
-// ─── routes ─────────────────────────────────────────────────────────────────
+// ─── Input validation schemas ─────────────────────────────────────────────────
+
+const urlRunSchema = z.object({
+  appUrl: z.string().url("Enter a valid URL starting with https://"),
+  appDescription: z.string().min(10).max(2000),
+});
+
+const sastSchema = z.object({
+  projectName: z.string().min(1).max(100),
+  description: z.string().min(5).max(2000),
+});
+
+// ─── Routes ──────────────────────────────────────────────────────────────────
 
 router.get("/runs", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
+  if (!req.isAuthenticated()) {
+    logSecurityEvent("AUTH_MISSING", req, "GET /runs");
+    return void res.status(401).json({ error: "Authentication required" });
+  }
   const userId = (req.user as { id: string }).id;
   try {
     const runs = await db
@@ -277,13 +315,16 @@ router.get("/runs", async (req: Request, res: Response) => {
 });
 
 router.get("/stats", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
+  if (!req.isAuthenticated()) {
+    logSecurityEvent("AUTH_MISSING", req, "GET /stats");
+    return void res.status(401).json({ error: "Authentication required" });
+  }
   const userId = (req.user as { id: string }).id;
   try {
     const runs = await db
       .select({
-        id: qaRunsTable.id, runType: qaRunsTable.runType, status: qaRunsTable.status,
-        report: qaRunsTable.report,
+        id: qaRunsTable.id, runType: qaRunsTable.runType,
+        status: qaRunsTable.status, report: qaRunsTable.report,
       })
       .from(qaRunsTable)
       .where(eq(qaRunsTable.userId, userId));
@@ -315,21 +356,47 @@ router.get("/stats", async (req: Request, res: Response) => {
 });
 
 router.post("/runs", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
+  if (!req.isAuthenticated()) {
+    logSecurityEvent("AUTH_MISSING", req, "POST /runs");
+    return void res.status(401).json({ error: "Authentication required" });
+  }
   const userId = (req.user as { id: string }).id;
 
-  const parsed = z.object({ appUrl: z.string().url(), appDescription: z.string().min(10) }).safeParse(req.body);
-  if (!parsed.success) return void res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
+  // 1. Validate shape
+  const parsed = urlRunSchema.safeParse(req.body);
+  if (!parsed.success) {
+    logSecurityEvent("INPUT_REJECTED", req, `Validation: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`);
+    return void res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+  }
 
-  const { appUrl, appDescription } = parsed.data;
+  // 2. Sanitise inputs
+  let appUrl: string, appDescription: string;
   try {
-    const [run] = await db.insert(qaRunsTable).values({ userId, runType: "url", appUrl, appDescription, status: "running" }).returning();
+    appDescription = sanitizeAndLimit(parsed.data.appDescription, 2000, "appDescription");
+    // 3. SSRF check — blocks internal IPs, localhost, metadata endpoints
+    await assertSafeUrl(parsed.data.appUrl);
+    appUrl = parsed.data.appUrl;
+  } catch (err) {
+    if (err instanceof SecurityError) {
+      logSecurityEvent("SSRF_BLOCKED", req, `URL: ${parsed.data.appUrl} — ${err.message}`);
+      return void res.status(400).json({ error: err.message });
+    }
+    return void res.status(500).json({ error: "Failed to validate URL" });
+  }
+
+  try {
+    const [run] = await db
+      .insert(qaRunsTable)
+      .values({ userId, runType: "url", appUrl, appDescription, status: "running" })
+      .returning();
     res.status(201).json(run);
 
     analyzeUrl(appUrl, appDescription)
-      .then(report => db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, run.id)))
+      .then(report =>
+        db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, run.id)),
+      )
       .catch(async (err) => {
-        const msg = err instanceof Error ? err.message : "Analysis failed";
+        const msg = safeErrorMessage(err, "analyzeUrl");
         await db.update(qaRunsTable).set({ status: "failed", errorMessage: msg }).where(eq(qaRunsTable.id, run.id));
       });
   } catch {
@@ -338,31 +405,75 @@ router.post("/runs", async (req: Request, res: Response) => {
 });
 
 router.post("/sast", upload.array("files", 30), async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
+  if (!req.isAuthenticated()) {
+    logSecurityEvent("AUTH_MISSING", req, "POST /sast");
+    return void res.status(401).json({ error: "Authentication required" });
+  }
   const userId = (req.user as { id: string }).id;
 
-  const parsed = z.object({ projectName: z.string().min(1), description: z.string().min(5) }).safeParse(req.body);
-  if (!parsed.success) return void res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
+  const parsed = sastSchema.safeParse(req.body);
+  if (!parsed.success) {
+    logSecurityEvent("INPUT_REJECTED", req, `SAST validation: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`);
+    return void res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+  }
 
-  const { projectName, description } = parsed.data;
+  const projectName = sanitizeAndLimit(parsed.data.projectName, 100, "projectName");
+  const description = sanitizeAndLimit(parsed.data.description, 2000, "description");
+
   const uploadedFiles = req.files as Express.Multer.File[];
-  if (!uploadedFiles?.length) return void res.status(400).json({ error: "No files uploaded" });
+  if (!uploadedFiles?.length) {
+    return void res.status(400).json({ error: "No files uploaded" });
+  }
 
+  // Check total upload size
+  const totalBytes = uploadedFiles.reduce((sum, f) => sum + f.size, 0);
+  if (totalBytes > 50 * 1024 * 1024) {
+    return void res.status(400).json({ error: "Total upload exceeds 50 MB limit" });
+  }
+
+  const rejected: string[] = [];
   const codeFiles = uploadedFiles
-    .filter(f => isCodeFile(f.originalname))
-    .map(f => ({ name: f.originalname, content: f.buffer.toString("utf-8").replace(/\0/g, "") }))
-    .filter(f => f.content.length > 0);
+    .filter(f => {
+      // Sanitise filename and re-check extension
+      const safeName = sanitizeFilename(f.originalname);
+      if (!isCodeFile(safeName)) {
+        rejected.push(safeName);
+        return false;
+      }
+      // Binary content check (magic bytes + null-byte density)
+      if (isBinaryBuffer(f.buffer)) {
+        logSecurityEvent("FILE_REJECTED", req, `Binary file rejected: ${safeName}`);
+        rejected.push(safeName);
+        return false;
+      }
+      return true;
+    })
+    .map(f => ({
+      name: sanitizeFilename(f.originalname),
+      content: f.buffer.toString("utf-8").replace(/\0/g, ""),
+    }))
+    .filter(f => f.content.trim().length > 0);
 
-  if (!codeFiles.length) return void res.status(400).json({ error: "No readable code files found. Please upload source code files." });
+  if (!codeFiles.length) {
+    return void res.status(400).json({
+      error: "No readable source code files found.",
+      rejected: rejected.length ? rejected : undefined,
+    });
+  }
 
   try {
-    const [run] = await db.insert(qaRunsTable).values({ userId, runType: "sast", projectName, appDescription: description, status: "running" }).returning();
+    const [run] = await db
+      .insert(qaRunsTable)
+      .values({ userId, runType: "sast", projectName, appDescription: description, status: "running" })
+      .returning();
     res.status(201).json(run);
 
     analyzeCode(codeFiles, projectName, description)
-      .then(report => db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, run.id)))
+      .then(report =>
+        db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, run.id)),
+      )
       .catch(async (err) => {
-        const msg = err instanceof Error ? err.message : "Analysis failed";
+        const msg = safeErrorMessage(err, "analyzeCode");
         await db.update(qaRunsTable).set({ status: "failed", errorMessage: msg }).where(eq(qaRunsTable.id, run.id));
       });
   } catch {
@@ -371,10 +482,23 @@ router.post("/sast", upload.array("files", 30), async (req: Request, res: Respon
 });
 
 router.get("/runs/:id", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
+  if (!req.isAuthenticated()) {
+    logSecurityEvent("AUTH_MISSING", req, `GET /runs/${req.params.id}`);
+    return void res.status(401).json({ error: "Authentication required" });
+  }
+
+  const id = String(req.params.id);
+  if (!isValidUuid(id)) {
+    logSecurityEvent("INVALID_PARAM", req, `Non-UUID run ID: ${id}`);
+    return void res.status(400).json({ error: "Invalid run ID format" });
+  }
+
   const userId = (req.user as { id: string }).id;
   try {
-    const [run] = await db.select().from(qaRunsTable).where(and(eq(qaRunsTable.id, String(req.params.id)), eq(qaRunsTable.userId, userId)));
+    const [run] = await db
+      .select()
+      .from(qaRunsTable)
+      .where(and(eq(qaRunsTable.id, id), eq(qaRunsTable.userId, userId)));
     if (!run) return void res.status(404).json({ error: "Not found" });
     res.json(run);
   } catch {
@@ -383,10 +507,23 @@ router.get("/runs/:id", async (req: Request, res: Response) => {
 });
 
 router.delete("/runs/:id", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) return void res.status(401).json({ error: "Unauthorized" });
+  if (!req.isAuthenticated()) {
+    logSecurityEvent("AUTH_MISSING", req, `DELETE /runs/${req.params.id}`);
+    return void res.status(401).json({ error: "Authentication required" });
+  }
+
+  const id = String(req.params.id);
+  if (!isValidUuid(id)) {
+    logSecurityEvent("INVALID_PARAM", req, `Non-UUID run ID: ${id}`);
+    return void res.status(400).json({ error: "Invalid run ID format" });
+  }
+
   const userId = (req.user as { id: string }).id;
   try {
-    const [deleted] = await db.delete(qaRunsTable).where(and(eq(qaRunsTable.id, String(req.params.id)), eq(qaRunsTable.userId, userId))).returning();
+    const [deleted] = await db
+      .delete(qaRunsTable)
+      .where(and(eq(qaRunsTable.id, id), eq(qaRunsTable.userId, userId)))
+      .returning();
     if (!deleted) return void res.status(404).json({ error: "Not found" });
     res.json({ success: true as const });
   } catch {
