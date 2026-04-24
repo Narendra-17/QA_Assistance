@@ -1,0 +1,107 @@
+Here’s a clearer, more structured, and professional rewrite of your prompt, incorporating proper flow, research intent, and actionable outcomes:
+
+---
+
+### **Refined & Structured Prompt**
+
+Conduct a comprehensive market and competitor analysis to enhance the application strategically. Follow a systematic, step-by-step approach:
+
+---
+
+### **1. Market & Competitor Research**
+
+* Identify and analyze leading applications and services in the same domain (direct and indirect competitors), such as tools similar to productivity platforms like Microsoft 365, Slack, and Google Workspace.
+* Study their core features, unique selling points, user experience, and positioning in the market.
+* Focus on commonly expected features as well as advanced or differentiating capabilities. ([Kimola][1])
+
+---
+
+### **2. Feature Analysis & Benchmarking**
+
+* Create a detailed feature comparison matrix across selected competitors.
+* Categorize features into:
+
+  * Core (must-have features)
+  * Advanced (value-added features)
+  * Unique (differentiators)
+* Evaluate usability, integrations, workflows, and performance of each feature. ([thisisglance.com][2])
+
+---
+
+### **3. Gap Identification**
+
+* Identify:
+
+  * Features competitors provide that are missing in the current application
+  * Weak or poorly implemented features across competitors
+  * User pain points based on reviews, workflows, and usability issues
+* Classify gaps into:
+
+  * Critical gaps (essential missing features)
+  * Opportunity gaps (innovation potential)
+  * Experience gaps (UI/UX, workflows, accessibility) ([Backlogs.ai][3])
+
+---
+
+### **4. Gap Categorization**
+
+Organize identified gaps into structured categories such as:
+
+* Functionality gaps (missing features)
+* Workflow inefficiencies (manual or complex processes)
+* Integration gaps (lack of compatibility with other tools)
+* Platform gaps (missing mobile/web/desktop support)
+* Design & usability gaps
+* Performance and scalability gaps ([MaxVerdic][4])
+
+---
+
+### **5. Innovation & Solution Design**
+
+* For each identified gap:
+
+  * Propose the **best possible solution**, method, or feature improvement
+  * Introduce **unique ideas or innovations** that go beyond competitors
+  * Focus on solving real user problems rather than just matching features
+* Prioritize solutions based on:
+
+  * User impact
+  * Business value
+  * Implementation complexity
+
+---
+
+### **6. Implementation Strategy**
+
+* Define how these improvements can be integrated into the application:
+
+  * Architecture and scalability considerations
+  * UI/UX enhancements
+  * Performance optimization
+  * Security improvements
+* Provide a phased roadmap:
+
+  * Short-term (quick wins)
+  * Mid-term (feature enhancements)
+  * Long-term (innovative differentiation)
+
+---
+
+### **7. Outcome**
+
+* Deliver a clear, actionable report including:
+
+  * Competitor insights
+  * Feature comparison matrix
+  * Identified gaps
+  * Proposed solutions and innovations
+  * Implementation roadmap
+
+---
+
+This version transforms your prompt into a **complete product strategy framework**, making it far more actionable, structured, and aligned with real-world product development and competitive analysis practices.
+
+[1]: https://kimola.com/blog/complete-market-research-guide-for-productivity-apps?utm_source=chatgpt.com "Complete Market Research Guide for Productivity Apps - Kimola Blog"
+[2]: https://thisisglance.com/learning-centre/what-are-the-key-metrics-for-analysing-rival-mobile-apps?utm_source=chatgpt.com "What Are the Key Metrics for Analysing Rival Mobile Apps?"
+[3]: https://www.backlogs.ai/blog/competitor-feature-gap-analysis?utm_source=chatgpt.com "How to Conduct a Competitor Feature Gap Analysis | Backlogs.ai Blog"
+[4]: https://maxverdic.com/blog/feature-gap-analysis-methods?utm_source=chatgpt.com "Feature Gap Analysis: Build What Competitors Missing | MaxVerdic | MaxVerdic"

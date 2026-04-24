@@ -1,0 +1,95 @@
+
+
+Conduct a comprehensive market and competitor analysis to enhance the application strategically. Follow a systematic, step-by-step approach:
+
+---
+
+1. Market & Competitor Research
+
+* Identify and analyze leading applications and services in the same domain (direct and indirect competitors).
+* Study their core features, unique selling points, user experience, and positioning in the market.
+* Focus on commonly expected features as well as advanced or differentiating capabilities. 
+
+---
+
+2. Feature Analysis & Benchmarking
+
+* Create a detailed feature comparison matrix across selected competitors.
+* Categorize features into:
+
+  * Core (must-have features)
+  * Advanced (value-added features)
+  * Unique (differentiators)
+* Evaluate usability, integrations, workflows, and performance of each feature. ([thisisglance.com][2])
+
+---
+
+3. Gap Identification
+
+* Identify:
+
+  * Features competitors provide that are missing in the current application
+  * Weak or poorly implemented features across competitors
+  * User pain points based on reviews, workflows, and usability issues
+* Classify gaps into:
+
+  * Critical gaps (essential missing features)
+  * Opportunity gaps (innovation potential)
+  * Experience gaps (UI/UX, workflows, accessibility) ([Backlogs.ai][3])
+
+---
+
+4. Gap Categorization
+
+Organize identified gaps into structured categories such as:
+
+* Functionality gaps (missing features)
+* Workflow inefficiencies (manual or complex processes)
+* Integration gaps (lack of compatibility with other tools)
+* Platform gaps (missing mobile/web/desktop support)
+* Design & usability gaps
+* Performance and scalability gaps ([MaxVerdic][4])
+
+---
+
+5. Innovation & Solution Design
+
+* For each identified gap:
+
+  * Propose the **best possible solution**, method, or feature improvement
+  * Introduce **unique ideas or innovations** that go beyond competitors
+  * Focus on solving real user problems rather than just matching features
+* Prioritize solutions based on:
+
+  * User impact
+  * Business value
+  * Implementation complexity
+
+---
+
+6. Implementation Strategy
+
+* Define how these improvements can be integrated into the application:
+
+  * Architecture and scalability considerations
+  * UI/UX enhancements
+  * Performance optimization
+  * Security improvements
+* Provide a phased roadmap:
+
+  * Short-term (quick wins)
+  * Mid-term (feature enhancements)
+  * Long-term (innovative differentiation)
+
+---
+
+7. Outcome
+
+* Deliver a clear, actionable report including:
+
+  * Competitor insights
+  * Feature comparison matrix
+  * Identified gaps
+  * Proposed solutions and innovations
+  * Implementation roadmap
+
