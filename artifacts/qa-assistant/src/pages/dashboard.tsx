@@ -212,32 +212,75 @@ export default function Dashboard() {
             ))}
           </div>
         ) : runs.length === 0 ? (
-          <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }}
-            className="text-center py-20 rounded-2xl border border-white/6 bg-white/2">
-            <div className="w-14 h-14 rounded-2xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center mx-auto mb-4">
-              {search ? <Search className="w-7 h-7 text-violet-400" /> : <Activity className="w-7 h-7 text-violet-400" />}
-            </div>
-            <h3 className="text-lg font-display font-bold text-white mb-2">
-              {search ? "No matching runs" : "No test runs yet"}
-            </h3>
-            <p className="text-zinc-500 mb-6 text-sm max-w-xs mx-auto">
-              {search
-                ? `No results for "${search}". Try a different search term.`
-                : filter !== "all"
-                  ? `No ${filter === "url" ? "URL tests" : "SAST scans"} found.`
-                  : "Start your first security assessment to see results here."}
-            </p>
-            {!search && (
-              <div className="flex gap-3 justify-center">
-                <Button asChild variant="outline" size="sm" className="border-white/10 hover:bg-white/8 text-white rounded-xl">
-                  <Link href="/sast"><FileCode2 className="w-3.5 h-3.5 mr-1.5" />SAST Scan</Link>
-                </Button>
-                <Button asChild size="sm" className="bg-violet-600 hover:bg-violet-500 text-white rounded-xl">
-                  <Link href="/new"><Plus className="w-3.5 h-3.5 mr-1.5" />URL Test</Link>
-                </Button>
+          search || filter !== "all" ? (
+            <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }}
+              className="text-center py-16 rounded-2xl border border-white/6 bg-white/2">
+              <Search className="w-9 h-9 text-zinc-600 mx-auto mb-3" />
+              <h3 className="text-base font-display font-bold text-white mb-2">No matching runs</h3>
+              <p className="text-zinc-500 text-sm">{search ? `No results for "${search}".` : `No ${filter === "url" ? "URL tests" : "SAST scans"} found.`}</p>
+            </motion.div>
+          ) : (
+            /* First-run onboarding state */
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
+              <div className="text-center pt-8 pb-4">
+                <div className="relative w-16 h-16 mx-auto mb-5">
+                  <div className="absolute inset-0 bg-violet-500/20 rounded-2xl blur-xl animate-pulse" />
+                  <div className="relative w-16 h-16 rounded-2xl bg-violet-500/15 border border-violet-500/25 flex items-center justify-center">
+                    <ShieldAlert className="w-8 h-8 text-violet-400" />
+                  </div>
+                </div>
+                <h3 className="text-xl font-display font-bold text-white mb-2">Welcome to QA Assistant</h3>
+                <p className="text-zinc-500 text-sm max-w-md mx-auto">Your AI-powered security scanner. Run your first assessment to get started — no setup required.</p>
               </div>
-            )}
-          </motion.div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Link href="/new">
+                  <div className="group p-5 rounded-2xl border border-violet-500/15 bg-violet-500/4 hover:bg-violet-500/8 hover:border-violet-500/25 transition-all cursor-pointer">
+                    <div className="flex items-start gap-4">
+                      <div className="w-10 h-10 rounded-xl bg-violet-500/15 border border-violet-500/25 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                        <Globe className="w-5 h-5 text-violet-400" />
+                      </div>
+                      <div>
+                        <h4 className="font-display font-bold text-white text-sm mb-1">URL Test</h4>
+                        <p className="text-zinc-500 text-xs leading-relaxed">Paste a live URL. QA Assistant fetches the page, checks security headers, and runs an AI-powered analysis covering security, accessibility, performance, and UX.</p>
+                      </div>
+                    </div>
+                    <div className="mt-4 flex items-center gap-1.5 text-violet-400 text-xs font-semibold">
+                      <Plus className="w-3.5 h-3.5" />Start URL Test
+                    </div>
+                  </div>
+                </Link>
+                <Link href="/sast">
+                  <div className="group p-5 rounded-2xl border border-cyan-500/15 bg-cyan-500/4 hover:bg-cyan-500/8 hover:border-cyan-500/25 transition-all cursor-pointer">
+                    <div className="flex items-start gap-4">
+                      <div className="w-10 h-10 rounded-xl bg-cyan-500/15 border border-cyan-500/25 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                        <FileCode2 className="w-5 h-5 text-cyan-400" />
+                      </div>
+                      <div>
+                        <h4 className="font-display font-bold text-white text-sm mb-1">SAST Code Scan</h4>
+                        <p className="text-zinc-500 text-xs leading-relaxed">Upload source code files. The scanner detects hardcoded secrets, vulnerable dependencies via OSV.dev CVE database, and deep AI-powered vulnerability analysis.</p>
+                      </div>
+                    </div>
+                    <div className="mt-4 flex items-center gap-1.5 text-cyan-400 text-xs font-semibold">
+                      <Plus className="w-3.5 h-3.5" />Start SAST Scan
+                    </div>
+                  </div>
+                </Link>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { icon: ShieldAlert, label: "Secrets Detection", desc: "50+ credential patterns + entropy analysis", color: "#EF4444" },
+                  { icon: Activity, label: "CVE Scanning", desc: "Dependency vulnerabilities via OSV.dev", color: "#F97316" },
+                  { icon: CheckCircle2, label: "Issue Tracking", desc: "Mark issues resolved, acknowledged, or won't fix", color: "#10B981" },
+                ].map((f, i) => (
+                  <div key={i} className="p-4 rounded-2xl border border-white/6 bg-white/2">
+                    <f.icon className="w-5 h-5 mb-2" style={{ color: f.color }} />
+                    <p className="text-white text-xs font-semibold mb-1">{f.label}</p>
+                    <p className="text-zinc-600 text-[11px] leading-relaxed">{f.desc}</p>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          )
         ) : (
           <motion.div variants={CONTAINER} initial="hidden" animate="show" className="space-y-2">
             <AnimatePresence mode="popLayout">

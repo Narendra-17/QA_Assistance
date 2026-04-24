@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { db } from "@workspace/db";
-import { qaRunsTable } from "@workspace/db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { qaRunsTable, shareTokensTable, issueStatusesTable } from "@workspace/db/schema";
+import { eq, and, desc, gt } from "drizzle-orm";
 import { z } from "zod";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import multer from "multer";
@@ -16,12 +16,12 @@ import {
   SecurityError,
   logSecurityEvent,
 } from "../lib/security";
+import { detectSecrets, secretsToIssues } from "../lib/secrets-detector";
+import { scanDependencies, scaToIssues } from "../lib/sca-scanner";
 
 const router = Router();
 
 // ─── Upload config ───────────────────────────────────────────────────────────
-// Individual file limit: 5 MB
-// Total upload limit: 50 MB for 30 files
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 30, fieldSize: 1 * 1024 * 1024 },
@@ -30,93 +30,68 @@ const upload = multer({
 // ─── Allowed file types ──────────────────────────────────────────────────────
 
 const CODE_EXTS = new Set([
-  // JavaScript / TypeScript ecosystem
   ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".cts", ".mts",
-
-  // Python
   ".py", ".pyw", ".pyi",
-
-  // JVM languages
   ".java", ".kt", ".kts", ".groovy", ".scala", ".clj", ".cljs",
-
-  // .NET / Microsoft
   ".cs", ".vb", ".fs", ".fsx", ".csx",
-
-  // Go, Rust, C family
   ".go", ".rs", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh",
-
-  // Ruby, PHP, Perl, Lua
   ".rb", ".rake", ".php", ".phtml", ".pl", ".pm", ".lua",
-
-  // Mobile
   ".swift", ".m", ".mm", ".dart",
-
-  // Functional / other
   ".hs", ".lhs", ".ex", ".exs", ".erl", ".hrl", ".r",
-
-  // Shell / scripting
   ".sh", ".bash", ".zsh", ".fish", ".ps1", ".psm1", ".psd1", ".bat", ".cmd",
-
-  // Web / templates
   ".html", ".htm", ".vue", ".svelte",
   ".css", ".scss", ".sass", ".less",
   ".twig", ".ejs", ".hbs", ".mustache", ".pug", ".jade", ".jinja", ".j2",
-
-  // Markup & data
   ".xml", ".xsl", ".xslt", ".svg",
   ".json", ".jsonc", ".json5",
   ".yaml", ".yml",
   ".toml",
   ".ini", ".cfg", ".conf", ".config", ".properties",
   ".env", ".env.example", ".env.local", ".env.production",
-
-  // SQL & data
   ".sql", ".prisma", ".graphql", ".gql",
-
-  // Infrastructure as Code
-  ".tf", ".tfvars", ".hcl",
-  ".bicep",
-
-  // Build & packaging
-  ".gradle",
-  ".lock", ".mod", ".sum",
+  ".tf", ".tfvars", ".hcl", ".bicep",
+  ".gradle", ".lock", ".mod", ".sum",
   ".gemspec", ".podspec",
-
-  // Other dev files
   ".md", ".mdx",
-  ".proto",
-  ".thrift",
-  ".zig",
+  ".proto", ".thrift", ".zig",
 ]);
 
-/** Named files that carry no extension but are always relevant */
 const CODE_BASENAMES = new Set([
   "dockerfile", "containerfile",
   "makefile", "gnumakefile", "rakefile", "gemfile", "podfile",
   "vagrantfile", "jenkinsfile", "fastfile", "brewfile",
   "cmakelists.txt", "build.gradle", "pom.xml", "build.sbt",
-  "requirements.txt", "pipfile", "pyproject.toml",
+  "requirements.txt", "requirements-dev.txt", "pipfile", "pyproject.toml",
   "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-  "cargo.toml", "cargo.lock",
+  "cargo.toml", "cargo.lock", "gemfile.lock",
   "go.mod", "go.sum",
+  "composer.json", "composer.lock",
   ".npmrc", ".nvmrc", ".yarnrc", ".yarnrc.yml",
   ".babelrc", ".eslintrc", ".prettierrc", ".stylelintrc",
   ".editorconfig", ".gitignore", ".dockerignore",
-  ".htaccess", ".nginx.conf", "nginx.conf",
+  ".htaccess", "nginx.conf",
   "serverless.yml", "serverless.yaml",
   "docker-compose.yml", "docker-compose.yaml",
-  "kubernetes.yaml", "k8s.yaml",
 ]);
 
 function isCodeFile(filename: string): boolean {
   const ext = path.extname(filename).toLowerCase();
   const base = path.basename(filename).toLowerCase();
   const bareBase = base.startsWith(".") ? base.slice(1) : base;
-  return (
-    CODE_EXTS.has(ext) ||
-    CODE_BASENAMES.has(base) ||
-    CODE_BASENAMES.has(bareBase)
-  );
+  return CODE_EXTS.has(ext) || CODE_BASENAMES.has(base) || CODE_BASENAMES.has(bareBase);
+}
+
+// ─── Recalculate score including deterministic findings ───────────────────────
+
+function recalculateScore(issues: Array<{ severity: string }>): number {
+  let score = 100;
+  for (const issue of issues) {
+    if (issue.severity === "critical") score -= 25;
+    else if (issue.severity === "high") score -= 12;
+    else if (issue.severity === "medium") score -= 5;
+    else if (issue.severity === "low") score -= 2;
+  }
+  return Math.max(0, score);
 }
 
 // ─── Analysis helpers ────────────────────────────────────────────────────────
@@ -160,8 +135,7 @@ async function analyzeUrl(
     const metaTags = [...html.matchAll(/<meta[^>]+>/gi)].slice(0, 5).map(m => m[0].slice(0, 200));
 
     pageContent = JSON.stringify({
-      url: appUrl,
-      statusCode: resp.status,
+      url: appUrl, statusCode: resp.status,
       isHttps: appUrl.startsWith("https://"),
       title, headings, formCount: forms, linkCount: links,
       inputCount: inputs, scriptCount: scripts, securityHeaders, metaTags,
@@ -215,55 +189,74 @@ async function analyzeCode(
   projectName: string,
   description: string,
 ): Promise<Record<string, unknown>> {
+  // ── Phase 1: Deterministic pre-scan (secrets + SCA) ──────────────────────
+  const [secretFindings, scaFindings] = await Promise.all([
+    Promise.resolve(detectSecrets(files)),
+    scanDependencies(files),
+  ]);
+
+  const deterministicIssues = [
+    ...secretsToIssues(secretFindings),
+    ...scaToIssues(scaFindings),
+  ];
+
+  // ── Phase 2: AI analysis ──────────────────────────────────────────────────
   const filesSummary = files
     .slice(0, 25)
     .map(f => `### ${f.name}\n\`\`\`\n${f.content.slice(0, 2500)}\n\`\`\``)
     .join("\n\n");
 
-  const fileTypes = [...new Set(files.map(f => path.extname(f.name).toLowerCase() || f.name.toLowerCase()))].join(", ");
+  const fileTypes = [...new Set(files.map(f =>
+    path.extname(f.name).toLowerCase() || f.name.toLowerCase()
+  ))].join(", ");
 
-  const prompt = `You are a senior security engineer and code auditor performing Static Application Security Testing (SAST). Analyze ALL provided files for security vulnerabilities, misconfigurations, and best-practice violations — adapting your checks to the file types present.
+  // Tell the AI which secrets/deps were already found so it doesn't repeat them
+  const alreadyFound = deterministicIssues.length > 0
+    ? `\n\nNOTE: The following issues have ALREADY been detected by deterministic analysis — do NOT duplicate them:\n${deterministicIssues.map(i => `• ${i.title}`).join("\n")}`
+    : "";
+
+  const prompt = `You are a senior security engineer and code auditor performing SAST. Analyze ALL provided files for security vulnerabilities, misconfigurations, and best-practice violations — adapting checks to the file types present.
 
 Project: ${projectName}
 Description: ${description}
 Files analyzed: ${files.length} (${fileTypes})
+${alreadyFound}
 
 ${filesSummary}
 
 ANALYSIS RULES BY FILE TYPE:
-- Source code (.ts/.js/.py/.java/.go/.cs/.rb/.php/.swift/.rs/etc.): SQL injection, XSS, hardcoded credentials, insecure deserialization, broken auth, CSRF, path traversal, command injection, prototype pollution, insecure crypto, missing input validation, debug code left in production, open redirects, IDOR, race conditions
-- Shell scripts (.sh/.bash/.zsh/.ps1/.bat/.cmd): Command injection, unquoted variables, unsafe eval/exec, world-writable files, privilege escalation, unsafe use of sudo, sensitive data in arguments, missing error handling
-- Markup & templates (.html/.ejs/.hbs/.twig/.pug): XSS via unescaped output, unsafe innerHTML, CSRF token absence, clickjacking, mixed content, insecure resource loading
-- CSS/SCSS/LESS (.css/.scss/.sass/.less): CSS injection, data exfiltration via CSS, use of unsafe external fonts/resources
-- Config & environment (.env/.ini/.cfg/.properties/.yaml/.yml): Hardcoded secrets/API keys/passwords, debug mode enabled in production, overly permissive CORS, insecure defaults, sensitive data committed
-- Infrastructure as Code (.tf/.tfvars/.hcl/.bicep): Exposed cloud credentials, overly permissive IAM policies, public S3 buckets or storage, unencrypted data stores, open security groups (0.0.0.0/0), missing audit logging, no MFA enforcement, privileged containers, host path mounts
-- Kubernetes & Docker (*.yaml k8s manifests, Dockerfile, docker-compose.yml): Privileged containers, running as root, exposed ports, no resource limits, hardcoded secrets in env vars, use of latest tag, insecure base images, no read-only root filesystem, no network policies, RBAC misconfigurations
-- Build & dependency files (package.json, requirements.txt, Gemfile, pom.xml, go.mod, Cargo.toml, gradle): Known vulnerable dependency versions, dependency confusion attacks, unpinned versions, suspicious packages, overly broad permissions, exposed registry tokens
-- Makefile / Rakefile / Jenkinsfile / CI configs: Command injection in build steps, exposed secrets in CI env, insecure artifact storage, missing SAST/DAST steps, insecure remote fetching
-- Database (.sql/.prisma): SQL injection patterns, missing parameterized queries, unencrypted PII, over-privileged roles, missing row-level security
-- Protocol buffers / Thrift (.proto/.thrift): Missing field validation, overly permissive schemas, sensitive data without encryption annotations
+- Source code: SQL injection, XSS, insecure deserialization, broken auth, CSRF, path traversal, command injection, prototype pollution, insecure crypto, missing input validation, debug code, open redirects, IDOR, race conditions
+- Shell scripts: command injection, unquoted variables, unsafe eval/exec, privilege escalation, sensitive data in arguments
+- Templates: XSS via unescaped output, CSRF token absence, clickjacking, mixed content
+- CSS: CSS injection, data exfiltration
+- Config & environment: debug mode in production, overly permissive CORS, insecure defaults
+- IaC (.tf/.hcl/.bicep): permissive IAM, public storage, unencrypted stores, open security groups, no MFA
+- Kubernetes/Docker: privileged containers, running as root, exposed ports, no resource limits, secrets in env vars, latest tag, no read-only filesystem
+- Build/CI files: command injection in steps, insecure artifact storage, missing SAST steps
+- Database files: unparameterized queries, unencrypted PII, over-privileged roles
 
 Respond with ONLY valid JSON:
 {
-  "summary": "2-3 sentence executive summary of security posture",
+  "summary": "2-3 sentence executive summary",
   "issues": [
     {
       "title": "Vulnerability title",
       "description": "Detailed explanation",
       "severity": "critical|high|medium|low",
-      "possibleCause": "Root cause or anti-pattern",
+      "possibleCause": "Root cause",
       "suggestedFix": "Concrete actionable fix with code example where relevant",
-      "codeSnippet": "Relevant vulnerable code or config snippet (or null)",
+      "codeSnippet": "Relevant vulnerable snippet (or null)",
       "filePath": "path/to/file.ext or null",
-      "lineNumber": null
+      "lineNumber": null,
+      "detectionMethod": "ai"
     }
   ],
-  "overallScore": <0-100>,
-  "recommendations": ["Strategic recommendation 1", "Strategic recommendation 2"],
+  "overallScore": 0,
+  "recommendations": ["Strategic recommendation 1"],
   "testType": "sast"
 }
 
-Score = 100 - (critical×25 + high×12 + medium×5 + low×2), minimum 0. Include 4-12 issues. Sort by severity descending.`;
+Return 4-12 NEW issues only (not already listed above). Set overallScore to 0 — it will be recalculated. Sort by severity descending.`;
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
@@ -273,7 +266,22 @@ Score = 100 - (critical×25 + high×12 + medium×5 + low×2), minimum 0. Include
     max_tokens: 4096,
   });
 
-  return JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
+  const aiResult = JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
+
+  // ── Phase 3: Merge and recalculate score ──────────────────────────────────
+  const aiIssues = (aiResult.issues as Array<Record<string, unknown>>) ?? [];
+  const allIssues = [...deterministicIssues, ...aiIssues];
+  const score = recalculateScore(allIssues as Array<{ severity: string }>);
+
+  return {
+    ...aiResult,
+    issues: allIssues,
+    overallScore: score,
+    deterministicFindings: {
+      secretsFound: secretFindings.length,
+      vulnerableDepsFound: scaFindings.length,
+    },
+  };
 }
 
 // ─── Input validation schemas ─────────────────────────────────────────────────
@@ -288,7 +296,16 @@ const sastSchema = z.object({
   description: z.string().min(5).max(2000),
 });
 
-// ─── Routes ──────────────────────────────────────────────────────────────────
+const shareSchema = z.object({
+  expiresInHours: z.number().int().min(1).max(720).default(168), // 1h – 30 days, default 7 days
+});
+
+const issueStatusSchema = z.object({
+  status: z.enum(["open", "acknowledged", "resolved", "wont_fix"]),
+  note: z.string().max(500).optional(),
+});
+
+// ─── Runs ─────────────────────────────────────────────────────────────────────
 
 router.get("/runs", async (req: Request, res: Response) => {
   if (!req.isAuthenticated()) {
@@ -322,10 +339,7 @@ router.get("/stats", async (req: Request, res: Response) => {
   const userId = (req.user as { id: string }).id;
   try {
     const runs = await db
-      .select({
-        id: qaRunsTable.id, runType: qaRunsTable.runType,
-        status: qaRunsTable.status, report: qaRunsTable.report,
-      })
+      .select({ id: qaRunsTable.id, runType: qaRunsTable.runType, status: qaRunsTable.status, report: qaRunsTable.report })
       .from(qaRunsTable)
       .where(eq(qaRunsTable.userId, userId));
 
@@ -362,18 +376,15 @@ router.post("/runs", async (req: Request, res: Response) => {
   }
   const userId = (req.user as { id: string }).id;
 
-  // 1. Validate shape
   const parsed = urlRunSchema.safeParse(req.body);
   if (!parsed.success) {
     logSecurityEvent("INPUT_REJECTED", req, `Validation: ${JSON.stringify(parsed.error.flatten().fieldErrors)}`);
     return void res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
   }
 
-  // 2. Sanitise inputs
   let appUrl: string, appDescription: string;
   try {
     appDescription = sanitizeAndLimit(parsed.data.appDescription, 2000, "appDescription");
-    // 3. SSRF check — blocks internal IPs, localhost, metadata endpoints
     await assertSafeUrl(parsed.data.appUrl);
     appUrl = parsed.data.appUrl;
   } catch (err) {
@@ -421,11 +432,8 @@ router.post("/sast", upload.array("files", 30), async (req: Request, res: Respon
   const description = sanitizeAndLimit(parsed.data.description, 2000, "description");
 
   const uploadedFiles = req.files as Express.Multer.File[];
-  if (!uploadedFiles?.length) {
-    return void res.status(400).json({ error: "No files uploaded" });
-  }
+  if (!uploadedFiles?.length) return void res.status(400).json({ error: "No files uploaded" });
 
-  // Check total upload size
   const totalBytes = uploadedFiles.reduce((sum, f) => sum + f.size, 0);
   if (totalBytes > 50 * 1024 * 1024) {
     return void res.status(400).json({ error: "Total upload exceeds 50 MB limit" });
@@ -434,13 +442,8 @@ router.post("/sast", upload.array("files", 30), async (req: Request, res: Respon
   const rejected: string[] = [];
   const codeFiles = uploadedFiles
     .filter(f => {
-      // Sanitise filename and re-check extension
       const safeName = sanitizeFilename(f.originalname);
-      if (!isCodeFile(safeName)) {
-        rejected.push(safeName);
-        return false;
-      }
-      // Binary content check (magic bytes + null-byte density)
+      if (!isCodeFile(safeName)) { rejected.push(safeName); return false; }
       if (isBinaryBuffer(f.buffer)) {
         logSecurityEvent("FILE_REJECTED", req, `Binary file rejected: ${safeName}`);
         rejected.push(safeName);
@@ -495,9 +498,7 @@ router.get("/runs/:id", async (req: Request, res: Response) => {
 
   const userId = (req.user as { id: string }).id;
   try {
-    const [run] = await db
-      .select()
-      .from(qaRunsTable)
+    const [run] = await db.select().from(qaRunsTable)
       .where(and(eq(qaRunsTable.id, id), eq(qaRunsTable.userId, userId)));
     if (!run) return void res.status(404).json({ error: "Not found" });
     res.json(run);
@@ -520,14 +521,165 @@ router.delete("/runs/:id", async (req: Request, res: Response) => {
 
   const userId = (req.user as { id: string }).id;
   try {
-    const [deleted] = await db
-      .delete(qaRunsTable)
+    const [deleted] = await db.delete(qaRunsTable)
       .where(and(eq(qaRunsTable.id, id), eq(qaRunsTable.userId, userId)))
       .returning();
     if (!deleted) return void res.status(404).json({ error: "Not found" });
     res.json({ success: true as const });
   } catch {
     res.status(500).json({ error: "Failed to delete run" });
+  }
+});
+
+// ─── Share tokens ─────────────────────────────────────────────────────────────
+
+router.post("/runs/:id/share", async (req: Request, res: Response) => {
+  if (!req.isAuthenticated()) {
+    logSecurityEvent("AUTH_MISSING", req, `POST /runs/${req.params.id}/share`);
+    return void res.status(401).json({ error: "Authentication required" });
+  }
+
+  const id = String(req.params.id);
+  if (!isValidUuid(id)) {
+    logSecurityEvent("INVALID_PARAM", req, `Non-UUID run ID: ${id}`);
+    return void res.status(400).json({ error: "Invalid run ID format" });
+  }
+
+  const parsed = shareSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return void res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+  }
+
+  const userId = (req.user as { id: string }).id;
+
+  // Verify the run belongs to this user and is completed
+  const [run] = await db.select({ id: qaRunsTable.id, status: qaRunsTable.status })
+    .from(qaRunsTable)
+    .where(and(eq(qaRunsTable.id, id), eq(qaRunsTable.userId, userId)));
+
+  if (!run) return void res.status(404).json({ error: "Run not found" });
+  if (run.status !== "completed") {
+    return void res.status(400).json({ error: "Only completed reports can be shared" });
+  }
+
+  const expiresAt = new Date(Date.now() + parsed.data.expiresInHours * 60 * 60 * 1000);
+
+  try {
+    const [shareToken] = await db.insert(shareTokensTable)
+      .values({ runId: id, userId, expiresAt })
+      .returning();
+    res.json({ token: shareToken.token, expiresAt: shareToken.expiresAt });
+  } catch {
+    res.status(500).json({ error: "Failed to create share link" });
+  }
+});
+
+// Public endpoint — no auth required, but token must be valid and unexpired
+router.get("/share/:token", async (req: Request, res: Response) => {
+  const token = String(req.params.token);
+  if (!isValidUuid(token)) {
+    return void res.status(400).json({ error: "Invalid token format" });
+  }
+
+  try {
+    const [shareRecord] = await db.select()
+      .from(shareTokensTable)
+      .where(and(
+        eq(shareTokensTable.token, token),
+        gt(shareTokensTable.expiresAt, new Date()),
+      ));
+
+    if (!shareRecord) return void res.status(404).json({ error: "Share link not found or has expired" });
+
+    const [run] = await db.select().from(qaRunsTable).where(eq(qaRunsTable.id, shareRecord.runId));
+    if (!run) return void res.status(404).json({ error: "Report not found" });
+
+    // Return run without userId for privacy
+    const { userId: _userId, ...publicRun } = run;
+    res.json({ run: publicRun, expiresAt: shareRecord.expiresAt });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch shared report" });
+  }
+});
+
+// ─── Issue lifecycle ──────────────────────────────────────────────────────────
+
+router.get("/runs/:id/issue-statuses", async (req: Request, res: Response) => {
+  if (!req.isAuthenticated()) {
+    logSecurityEvent("AUTH_MISSING", req, `GET /runs/${req.params.id}/issue-statuses`);
+    return void res.status(401).json({ error: "Authentication required" });
+  }
+
+  const id = String(req.params.id);
+  if (!isValidUuid(id)) return void res.status(400).json({ error: "Invalid run ID format" });
+
+  const userId = (req.user as { id: string }).id;
+  // Verify ownership
+  const [run] = await db.select({ id: qaRunsTable.id })
+    .from(qaRunsTable).where(and(eq(qaRunsTable.id, id), eq(qaRunsTable.userId, userId)));
+  if (!run) return void res.status(404).json({ error: "Not found" });
+
+  try {
+    const statuses = await db.select()
+      .from(issueStatusesTable)
+      .where(and(eq(issueStatusesTable.runId, id), eq(issueStatusesTable.userId, userId)));
+    res.json({ statuses });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch issue statuses" });
+  }
+});
+
+router.patch("/runs/:id/issues/:index/status", async (req: Request, res: Response) => {
+  if (!req.isAuthenticated()) {
+    logSecurityEvent("AUTH_MISSING", req, `PATCH /runs/${req.params.id}/issues/${req.params.index}/status`);
+    return void res.status(401).json({ error: "Authentication required" });
+  }
+
+  const id = String(req.params.id);
+  if (!isValidUuid(id)) return void res.status(400).json({ error: "Invalid run ID format" });
+
+  const issueIndex = parseInt(String(req.params.index), 10);
+  if (isNaN(issueIndex) || issueIndex < 0 || issueIndex > 9999) {
+    return void res.status(400).json({ error: "Invalid issue index" });
+  }
+
+  const parsed = issueStatusSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return void res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+  }
+
+  const userId = (req.user as { id: string }).id;
+  const note = parsed.data.note ? sanitizeAndLimit(parsed.data.note, 500, "note") : null;
+
+  // Verify run ownership
+  const [run] = await db.select({ id: qaRunsTable.id })
+    .from(qaRunsTable).where(and(eq(qaRunsTable.id, id), eq(qaRunsTable.userId, userId)));
+  if (!run) return void res.status(404).json({ error: "Run not found" });
+
+  try {
+    // Upsert — insert or update if exists
+    const existing = await db.select({ id: issueStatusesTable.id })
+      .from(issueStatusesTable)
+      .where(and(
+        eq(issueStatusesTable.runId, id),
+        eq(issueStatusesTable.userId, userId),
+        eq(issueStatusesTable.issueIndex, issueIndex),
+      ));
+
+    let result;
+    if (existing.length > 0) {
+      [result] = await db.update(issueStatusesTable)
+        .set({ status: parsed.data.status, note: note ?? undefined })
+        .where(eq(issueStatusesTable.id, existing[0].id))
+        .returning();
+    } else {
+      [result] = await db.insert(issueStatusesTable)
+        .values({ runId: id, userId, issueIndex, status: parsed.data.status, note: note ?? undefined })
+        .returning();
+    }
+    res.json(result);
+  } catch {
+    res.status(500).json({ error: "Failed to update issue status" });
   }
 });
 

@@ -14,6 +14,7 @@ const Landing = lazy(() => import("@/pages/landing"));
 const Dashboard = lazy(() => import("@/pages/dashboard"));
 const NewRun = lazy(() => import("@/pages/new-run"));
 const Report = lazy(() => import("@/pages/report"));
+const SharedReport = lazy(() => import("@/pages/shared-report"));
 
 function UrlTestPage() { return <NewRun initialTab="url" />; }
 function SastPage() { return <NewRun initialTab="sast" />; }
@@ -115,7 +116,11 @@ function ProtectedRouter() {
   if (!isAuthenticated) {
     return (
       <Suspense fallback={<PageLoader />}>
-        <Landing />
+        <Switch>
+          {/* Public share route — accessible without login */}
+          <Route path="/share/:token" component={SharedReport} />
+          <Route component={Landing} />
+        </Switch>
       </Suspense>
     );
   }
@@ -128,6 +133,8 @@ function ProtectedRouter() {
           <Route path="/new" component={UrlTestPage} />
           <Route path="/sast" component={SastPage} />
           <Route path="/runs/:id" component={Report} />
+          {/* Share route also available when logged in */}
+          <Route path="/share/:token" component={SharedReport} />
           <Route component={NotFound} />
         </Switch>
       </Suspense>
