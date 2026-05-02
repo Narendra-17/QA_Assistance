@@ -266,3 +266,73 @@ body {
   to   { opacity: 1; transform: translateY(0); }
 }
 .page-enter { animation: fade-up 0.3s ease both; }
+
+/* ── New utility animations ─────────────────────── */
+
+/* Star twinkle — used in landing StarField */
+@keyframes star-twinkle {
+  0%, 100% { opacity: 0;    transform: scale(0.5); }
+  50%       { opacity: 0.55; transform: scale(1);   }
+}
+
+/* Ambient orb drift */
+@keyframes orb-drift {
+  0%, 100% { transform: translate(0,   0)   scale(1);    }
+  33%       { transform: translate(2%,  4%)  scale(1.06); }
+  66%       { transform: translate(-2%, -2%) scale(0.96); }
+}
+.orb-drift   { animation: orb-drift 14s ease-in-out infinite;         }
+.orb-drift-2 { animation: orb-drift 18s ease-in-out infinite reverse; }
+
+/* Terminal cursor blink */
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+.cursor-blink { animation: cursor-blink 1s step-end infinite; }
+
+/* Typed terminal line reveal */
+@keyframes terminal-line-in {
+  from { opacity: 0; transform: translateX(-5px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.terminal-line { animation: terminal-line-in 0.16s ease both; }
+
+/* Ambient glow pulse */
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 20px hsl(var(--primary) / 0.18); }
+  50%       { box-shadow: 0 0 52px hsl(var(--primary) / 0.38), 0 0 96px hsl(var(--primary) / 0.1); }
+}
+.glow-pulse { animation: glow-pulse 3s ease-in-out infinite; }
+
+/* Hover lift — cards, buttons */
+.hover-lift { transition: transform 0.18s ease, box-shadow 0.18s ease; }
+.hover-lift:hover { transform: translateY(-2px); box-shadow: 0 12px 36px hsl(var(--primary) / 0.16); }
+
+/* Stat value flash when it updates */
+@keyframes value-pop {
+  0%   { opacity: 0; transform: translateY(6px) scale(0.95); }
+  60%  { transform: translateY(-1px) scale(1.02); }
+  100% { opacity: 1; transform: translateY(0)   scale(1);    }
+}
+.value-pop { animation: value-pop 0.4s cubic-bezier(0.34,1.56,0.64,1) both; }
+
+/* Severity bar segment fill */
+@keyframes bar-fill {
+  from { transform: scaleX(0); transform-origin: left; }
+  to   { transform: scaleX(1); transform-origin: left; }
+}
+.bar-fill { animation: bar-fill 0.6s cubic-bezier(0.34,1.56,0.64,1) 0.2s both; }
+
+/* Subtle slide in from right */
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(18px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.slide-in-right { animation: slide-in-right 0.35s ease both; }
+
+/* Soft violet text glow */
+.text-glow-violet {
+  color: hsl(var(--primary));
+  text-shadow: 0 0 28px hsl(var(--primary) / 0.45);
+}

@@ -15,7 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { motion, AnimatePresence, type Variants } from "framer-motion";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { StatusBadge } from "@/components/status-badge";
@@ -27,15 +27,44 @@ import {
 
 const CONTAINER: Variants = {
   hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.05 } },
+  show:   { opacity: 1, transition: { staggerChildren: 0.05 } },
 };
 const ITEM: Variants = {
   hidden: { opacity: 0, y: 12 },
-  show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 320, damping: 28 } },
+  show:   { opacity: 1, y: 0, transition: { type: "spring", stiffness: 320, damping: 28 } },
 };
 
-// ─── Score Trend Chart ────────────────────────────────────────────────────────
+// ── Animated counter ──────────────────────────────────────────────────────────
+function useCountUp(target: number, duration = 1100) {
+  const [value, setValue] = useState(0);
+  const prevRef           = useRef(0);
 
+  useEffect(() => {
+    if (target === prevRef.current) return;
+    const from = prevRef.current;
+    prevRef.current = target;
+
+    if (from === target) return;
+
+    let startTs: number | null = null;
+    let raf: number;
+
+    function tick(now: number) {
+      if (!startTs) startTs = now;
+      const p    = Math.min((now - startTs) / duration, 1);
+      const ease = 1 - Math.pow(1 - p, 4);
+      setValue(Math.round(from + (target - from) * ease));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    }
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, duration]);
+
+  return value;
+}
+
+// ── Score trend chart ─────────────────────────────────────────────────────────
 interface ScorePoint { id: string; score: number; runType: string; createdAt: string; label: string }
 
 function scoreColor(s: number) { return s >= 80 ? "#10B981" : s >= 60 ? "#F59E0B" : s >= 40 ? "#F97316" : "#EF4444"; }
@@ -48,7 +77,7 @@ function ScoreTrendChart({ data }: { data: ScorePoint[] }) {
     date: new Date(d.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
     type: d.runType,
   }));
-  const last = chartData.at(-1);
+  const last  = chartData.at(-1);
   const first = chartData[0];
   const delta = last && first ? last.score - first.score : 0;
 
@@ -72,8 +101,8 @@ function ScoreTrendChart({ data }: { data: ScorePoint[] }) {
         <AreaChart data={chartData} margin={{ top: 4, right: 4, left: -28, bottom: 0 }}>
           <defs>
             <linearGradient id="scoreGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#8B5CF6" stopOpacity={0.22} />
-              <stop offset="95%" stopColor="#8B5CF6" stopOpacity={0} />
+              <stop offset="5%"  stopColor="#8B5CF6" stopOpacity={0.22} />
+              <stop offset="95%" stopColor="#8B5CF6" stopOpacity={0}    />
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false} />
@@ -88,11 +117,9 @@ function ScoreTrendChart({ data }: { data: ScorePoint[] }) {
               props.payload?.label ?? "",
             ]}
           />
-          <Area type="monotone" dataKey="score" stroke="#8B5CF6" strokeWidth={2}
-            fill="url(#scoreGrad)"
+          <Area type="monotone" dataKey="score" stroke="#8B5CF6" strokeWidth={2} fill="url(#scoreGrad)"
             dot={(props: { cx?: number; cy?: number; payload?: { score: number }; index?: number }) => (
-              <circle key={props.index} cx={props.cx} cy={props.cy} r={3.5}
-                fill={scoreColor(props.payload?.score ?? 0)} strokeWidth={0} />
+              <circle key={props.index} cx={props.cx} cy={props.cy} r={3.5} fill={scoreColor(props.payload?.score ?? 0)} strokeWidth={0} />
             )}
           />
         </AreaChart>
@@ -101,14 +128,20 @@ function ScoreTrendChart({ data }: { data: ScorePoint[] }) {
   );
 }
 
+// ── Stat card ─────────────────────────────────────────────────────────────────
 function StatCard({ label, value, sub, icon: Icon, color, loading }: {
   label: string; value: string | number; sub?: string;
   icon: React.ElementType; color: string; loading?: boolean;
 }) {
+  const numTarget    = typeof value === "number" ? value :
+    (typeof value === "string" && value !== "—" && !isNaN(Number(value))) ? Number(value) : null;
+  const animatedNum  = useCountUp(numTarget ?? 0, 1100);
+  const displayValue = loading ? null : numTarget !== null ? animatedNum : value;
+
   return (
     <motion.div variants={ITEM}
       className="group relative overflow-hidden rounded-2xl border border-white/8 p-5 flex items-start gap-4 transition-all duration-200 hover:border-white/14"
-      style={{ background: "linear-gradient(145deg, hsl(230 22% 8%), hsl(230 22% 7%))" }}>
+      style={{ background: "linear-gradient(145deg,hsl(230 22% 8%),hsl(230 22% 7%))" }}>
       <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
         style={{ background: `radial-gradient(circle at 0% 0%, ${color}08 0%, transparent 70%)` }} />
       <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 relative z-10 transition-transform group-hover:scale-110 duration-200"
@@ -119,7 +152,9 @@ function StatCard({ label, value, sub, icon: Icon, color, loading }: {
         {loading ? (
           <div className="h-8 w-16 rounded-lg shimmer mb-1" />
         ) : (
-          <div className="text-2xl font-display font-bold text-white tabular-nums">{value}</div>
+          <div key={String(displayValue)} className="text-2xl font-display font-bold text-white tabular-nums value-pop">
+            {displayValue}
+          </div>
         )}
         <div className="text-sm text-zinc-400 mt-0.5 font-medium">{label}</div>
         {sub && <div className="text-xs text-zinc-600 mt-0.5">{sub}</div>}
@@ -128,20 +163,52 @@ function StatCard({ label, value, sub, icon: Icon, color, loading }: {
   );
 }
 
+// ── Severity bar ──────────────────────────────────────────────────────────────
+function SeverityBar({ issues }: { issues: Array<{ severity: string }> }) {
+  const total = issues.length;
+  if (total === 0) return null;
+
+  const counts = {
+    critical: issues.filter(i => i.severity === "critical").length,
+    high:     issues.filter(i => i.severity === "high").length,
+    medium:   issues.filter(i => i.severity === "medium").length,
+    low:      issues.filter(i => i.severity === "low").length,
+  };
+
+  return (
+    <div className="hidden md:flex flex-col items-center gap-1 shrink-0">
+      <div className="flex h-1.5 w-14 rounded-full overflow-hidden gap-[1px] bg-white/5">
+        {counts.critical > 0 && (
+          <div className="bar-fill h-full rounded-sm" style={{ width: `${(counts.critical / total) * 100}%`, background: "#EF4444" }} />
+        )}
+        {counts.high > 0 && (
+          <div className="bar-fill h-full rounded-sm" style={{ width: `${(counts.high / total) * 100}%`, background: "#F97316", animationDelay: "0.05s" }} />
+        )}
+        {counts.medium > 0 && (
+          <div className="bar-fill h-full rounded-sm" style={{ width: `${(counts.medium / total) * 100}%`, background: "#F59E0B", animationDelay: "0.1s" }} />
+        )}
+        {counts.low > 0 && (
+          <div className="bar-fill h-full rounded-sm" style={{ width: `${(counts.low / total) * 100}%`, background: "#06B6D4", animationDelay: "0.15s" }} />
+        )}
+      </div>
+      <span className="text-[9px] text-zinc-600 font-mono tabular-nums">{total} issues</span>
+    </div>
+  );
+}
+
 type FilterType = "all" | "url" | "sast";
 
 export default function Dashboard() {
-  const [filter, setFilter] = useState<FilterType>("all");
-  const [search, setSearch] = useState("");
+  const [filter,   setFilter]   = useState<FilterType>("all");
+  const [search,   setSearch]   = useState("");
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
-  const { data, isLoading } = useListQaRuns();
+  const { data, isLoading }              = useListQaRuns();
   const { data: stats, isLoading: statsLoading } = useGetQaStats();
   const deleteMutation = useDeleteQaRun();
-  const queryClient = useQueryClient();
+  const queryClient    = useQueryClient();
 
-  const allRuns = data?.runs ?? [];
-
+  const allRuns     = data?.runs ?? [];
   const runningCount = allRuns.filter(r => r.status === "running" || r.status === "pending").length;
 
   const runs = useMemo(() => {
@@ -151,16 +218,14 @@ export default function Dashboard() {
       list = list.filter(r =>
         r.appUrl?.toLowerCase().includes(q) ||
         r.projectName?.toLowerCase().includes(q) ||
-        r.appDescription?.toLowerCase().includes(q)
+        r.appDescription?.toLowerCase().includes(q),
       );
     }
     return list;
   }, [allRuns, filter, search]);
 
   function confirmDelete(id: string, e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    setDeleteId(id);
+    e.preventDefault(); e.stopPropagation(); setDeleteId(id);
   }
 
   function handleDelete() {
@@ -176,9 +241,6 @@ export default function Dashboard() {
     });
   }
 
-  const scoreColor = (s: number) =>
-    s >= 80 ? "#10B981" : s >= 60 ? "#F59E0B" : s >= 40 ? "#F97316" : "#EF4444";
-
   return (
     <>
       <AlertDialog open={!!deleteId} onOpenChange={(o) => !o && setDeleteId(null)}>
@@ -186,13 +248,12 @@ export default function Dashboard() {
           <AlertDialogHeader>
             <AlertDialogTitle className="text-white font-display">Delete this run?</AlertDialogTitle>
             <AlertDialogDescription className="text-zinc-400">
-              This will permanently delete the test run and its report. This action cannot be undone.
+              This permanently deletes the test run and its report. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel className="border-white/10 bg-white/4 text-white hover:bg-white/8 rounded-xl">Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete}
-              className="bg-red-600 hover:bg-red-500 text-white rounded-xl">
+            <AlertDialogAction onClick={handleDelete} className="bg-red-600 hover:bg-red-500 text-white rounded-xl">
               {deleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -228,13 +289,12 @@ export default function Dashboard() {
         </motion.div>
 
         {/* Stats */}
-        <motion.div variants={CONTAINER} initial="hidden" animate="show"
-          className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <StatCard label="Total Runs" value={stats?.totalRuns ?? 0} icon={Activity} color="#8B5CF6" loading={statsLoading} />
+        <motion.div variants={CONTAINER} initial="hidden" animate="show" className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <StatCard label="Total Runs"     value={stats?.totalRuns ?? 0}      icon={Activity}     color="#8B5CF6" loading={statsLoading} />
           <StatCard
             label="Avg Score"
             value={(stats?.completedRuns ?? 0) > 0 ? `${stats!.averageScore}` : "—"}
-            sub={(stats?.completedRuns ?? 0) > 0 ? `out of 100` : "no completed runs"}
+            sub={(stats?.completedRuns ?? 0) > 0 ? "out of 100" : "no completed runs"}
             icon={TrendingUp} color="#10B981" loading={statsLoading}
           />
           <StatCard
@@ -252,24 +312,24 @@ export default function Dashboard() {
         </motion.div>
 
         {/* Score Trend Chart */}
-        {!statsLoading && ((stats as any)?.scoreHistory?.length ?? 0) >= 2 && (
+        {!statsLoading && ((stats as { scoreHistory?: unknown[] } | undefined)?.scoreHistory?.length ?? 0) >= 2 && (
           <motion.div variants={ITEM} initial="hidden" animate="show"
             className="p-5 rounded-2xl border border-white/8"
-            style={{ background: "linear-gradient(145deg, hsl(230,22%,7%), hsl(230,22%,6%))" }}>
+            style={{ background: "linear-gradient(145deg,hsl(230,22%,7%),hsl(230,22%,6%))" }}>
             <div className="flex items-center gap-2 mb-4">
               <TrendingUp className="w-4 h-4 text-violet-400" />
               <p className="text-sm font-display font-semibold text-white">Security Score Trend</p>
               <div className="ml-auto flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-violet-500 opacity-60" />
-                <span className="w-2 h-2 rounded-full bg-violet-500 opacity-40" />
-                <span className="w-2 h-2 rounded-full bg-violet-500 opacity-20" />
+                {[0.6, 0.4, 0.2].map(o => (
+                  <span key={o} className="w-2 h-2 rounded-full bg-violet-500" style={{ opacity: o }} />
+                ))}
               </div>
             </div>
-            <ScoreTrendChart data={(stats as any).scoreHistory as ScorePoint[]} />
+            <ScoreTrendChart data={(stats as unknown as { scoreHistory: ScorePoint[] }).scoreHistory} />
           </motion.div>
         )}
 
-        {/* Controls row */}
+        {/* Search + filter */}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.15 }}
           className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1 max-w-xs">
@@ -283,11 +343,11 @@ export default function Dashboard() {
           <div className="flex items-center gap-1 p-1 rounded-xl bg-white/4 border border-white/8 w-fit h-9">
             {(["all", "url", "sast"] as FilterType[]).map((f) => (
               <button key={f} onClick={() => setFilter(f)}
-                className={[
-                  "px-3 py-1 rounded-lg text-xs font-semibold transition-all h-7",
-                  filter === f ? "bg-violet-600 text-white shadow-md" : "text-zinc-400 hover:text-zinc-200",
-                ].join(" ")}>
-                {f === "all" ? `All (${allRuns.length})` : f === "url" ? `URL (${allRuns.filter(r => r.runType === "url").length})` : `SAST (${allRuns.filter(r => r.runType === "sast").length})`}
+                className={["px-3 py-1 rounded-lg text-xs font-semibold transition-all h-7",
+                  filter === f ? "bg-violet-600 text-white shadow-md" : "text-zinc-400 hover:text-zinc-200"].join(" ")}>
+                {f === "all"  ? `All (${allRuns.length})`
+                  : f === "url"  ? `URL (${allRuns.filter(r => r.runType === "url").length})`
+                    : `SAST (${allRuns.filter(r => r.runType === "sast").length})`}
               </button>
             ))}
           </div>
@@ -306,10 +366,12 @@ export default function Dashboard() {
               className="text-center py-16 rounded-2xl border border-white/6 bg-white/2">
               <Search className="w-9 h-9 text-zinc-600 mx-auto mb-3" />
               <h3 className="text-base font-display font-bold text-white mb-2">No matching runs</h3>
-              <p className="text-zinc-500 text-sm">{search ? `No results for "${search}".` : `No ${filter === "url" ? "URL tests" : "SAST scans"} found.`}</p>
+              <p className="text-zinc-500 text-sm">
+                {search ? `No results for "${search}".` : `No ${filter === "url" ? "URL tests" : "SAST scans"} found.`}
+              </p>
             </motion.div>
           ) : (
-            /* First-run onboarding state */
+            /* First-run onboarding */
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
               <div className="text-center pt-8 pb-4">
                 <div className="relative w-16 h-16 mx-auto mb-5">
@@ -330,7 +392,7 @@ export default function Dashboard() {
                       </div>
                       <div>
                         <h4 className="font-display font-bold text-white text-sm mb-1">URL Test</h4>
-                        <p className="text-zinc-500 text-xs leading-relaxed">Paste a live URL. QA Assistant fetches the page, checks security headers, and runs an AI-powered analysis covering security, accessibility, performance, and UX.</p>
+                        <p className="text-zinc-500 text-xs leading-relaxed">Paste a live URL. QA Assistant checks security headers and runs an AI-powered analysis covering security, accessibility, performance, and UX.</p>
                       </div>
                     </div>
                     <div className="mt-4 flex items-center gap-1.5 text-violet-400 text-xs font-semibold">
@@ -346,7 +408,7 @@ export default function Dashboard() {
                       </div>
                       <div>
                         <h4 className="font-display font-bold text-white text-sm mb-1">SAST Code Scan</h4>
-                        <p className="text-zinc-500 text-xs leading-relaxed">Upload source code files. The scanner detects hardcoded secrets, vulnerable dependencies via OSV.dev CVE database, and deep AI-powered vulnerability analysis.</p>
+                        <p className="text-zinc-500 text-xs leading-relaxed">Upload source code files. Detects hardcoded secrets, vulnerable dependencies via OSV.dev CVE database, and deep AI-powered vulnerability analysis.</p>
                       </div>
                     </div>
                     <div className="mt-4 flex items-center gap-1.5 text-cyan-400 text-xs font-semibold">
@@ -357,9 +419,9 @@ export default function Dashboard() {
               </div>
               <div className="grid grid-cols-3 gap-3">
                 {[
-                  { icon: ShieldAlert, label: "Secrets Detection", desc: "50+ credential patterns + entropy analysis", color: "#EF4444" },
-                  { icon: Activity, label: "CVE Scanning", desc: "Dependency vulnerabilities via OSV.dev", color: "#F97316" },
-                  { icon: CheckCircle2, label: "Issue Tracking", desc: "Mark issues resolved, acknowledged, or won't fix", color: "#10B981" },
+                  { icon: ShieldAlert,  label: "Secrets Detection", desc: "50+ credential patterns + entropy analysis", color: "#EF4444" },
+                  { icon: Activity,     label: "CVE Scanning",       desc: "Dependency vulnerabilities via OSV.dev",    color: "#F97316" },
+                  { icon: CheckCircle2, label: "Issue Tracking",     desc: "Mark issues resolved, acknowledged, or won't fix", color: "#10B981" },
                 ].map((f, i) => (
                   <div key={i} className="p-4 rounded-2xl border border-white/6 bg-white/2">
                     <f.icon className="w-5 h-5 mb-2" style={{ color: f.color }} />
@@ -374,15 +436,15 @@ export default function Dashboard() {
           <motion.div variants={CONTAINER} initial="hidden" animate="show" className="space-y-2">
             <AnimatePresence mode="popLayout">
               {runs.map((run) => {
-                const report = (run as { report?: { overallScore?: number; issues?: unknown[] } }).report;
-                const score = report?.overallScore;
-                const issueCount = (report as { issues?: unknown[] } | undefined)?.issues?.length;
-                const isUrl = run.runType === "url";
-                const isRunning = run.status === "running" || run.status === "pending";
+                const report     = (run as { report?: { overallScore?: number; issues?: Array<{ severity: string }> } }).report;
+                const score      = report?.overallScore;
+                const issues     = report?.issues ?? [];
+                const issueCount = issues.length > 0 ? issues.length : undefined;
+                const isUrl      = run.runType === "url";
+                const isRunning  = run.status === "running" || run.status === "pending";
 
                 return (
-                  <motion.div key={run.id} variants={ITEM} layout
-                    exit={{ opacity: 0, x: -16, transition: { duration: 0.2 } }}>
+                  <motion.div key={run.id} variants={ITEM} layout exit={{ opacity: 0, x: -16, transition: { duration: 0.2 } }}>
                     <Link href={`/runs/${run.id}`} className="group block">
                       <div className={[
                         "flex items-center gap-4 px-4 py-3.5 rounded-2xl border transition-all duration-200 cursor-pointer",
@@ -393,9 +455,7 @@ export default function Dashboard() {
                         {/* Type icon */}
                         <div className={[
                           "w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 duration-200",
-                          isUrl
-                            ? "bg-violet-500/12 border border-violet-500/18"
-                            : "bg-cyan-500/12 border border-cyan-500/18",
+                          isUrl ? "bg-violet-500/12 border border-violet-500/18" : "bg-cyan-500/12 border border-cyan-500/18",
                         ].join(" ")}>
                           {isUrl
                             ? <Globe className="w-4 h-4 text-violet-400" />
@@ -425,6 +485,11 @@ export default function Dashboard() {
                           </div>
                         </div>
 
+                        {/* Severity bar */}
+                        {run.status === "completed" && issues.length > 0 && (
+                          <SeverityBar issues={issues} />
+                        )}
+
                         {/* Score */}
                         {score !== undefined && (
                           <div className="text-right shrink-0 hidden sm:block">
@@ -437,9 +502,7 @@ export default function Dashboard() {
                           <div className="shrink-0 hidden md:flex">
                             {score >= 80
                               ? <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                              : score >= 60
-                                ? <AlertTriangle className="w-4 h-4 text-amber-500" />
-                                : <AlertTriangle className="w-4 h-4 text-red-500" />}
+                              : <AlertTriangle className={`w-4 h-4 ${score >= 60 ? "text-amber-500" : "text-red-500"}`} />}
                           </div>
                         )}
 

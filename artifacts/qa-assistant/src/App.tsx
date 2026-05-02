@@ -1,43 +1,40 @@
-import { Suspense, lazy, Component, type ReactNode } from "react";
+import { Suspense, lazy, Component, type ReactNode, useState, useEffect } from "react";
 import { Switch, Route, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
+import { CommandPalette } from "@/components/command-palette";
 import { useAuth } from "@workspace/replit-auth-web";
 import { Loader2, AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-const NotFound = lazy(() => import("@/pages/not-found"));
-const Landing = lazy(() => import("@/pages/landing"));
-const Dashboard = lazy(() => import("@/pages/dashboard"));
-const NewRun = lazy(() => import("@/pages/new-run"));
-const Report = lazy(() => import("@/pages/report"));
+const NotFound     = lazy(() => import("@/pages/not-found"));
+const Landing      = lazy(() => import("@/pages/landing"));
+const Dashboard    = lazy(() => import("@/pages/dashboard"));
+const NewRun       = lazy(() => import("@/pages/new-run"));
+const Report       = lazy(() => import("@/pages/report"));
 const SharedReport = lazy(() => import("@/pages/shared-report"));
 const Integrations = lazy(() => import("@/pages/integrations"));
 
-function UrlTestPage() { return <NewRun initialTab="url" />; }
-function SastPage() { return <NewRun initialTab="sast" />; }
+function UrlTestPage() { return <NewRun initialTab="url"  />; }
+function SastPage()    { return <NewRun initialTab="sast" />; }
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
       refetchOnWindowFocus: false,
-      staleTime: 30 * 1000,
-      gcTime: 5 * 60 * 1000,
+      staleTime:  30 * 1000,
+      gcTime:  5 * 60 * 1000,
     },
   },
 });
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error?: Error }> {
   state = { hasError: false, error: undefined as Error | undefined };
-
-  static getDerivedStateFromError(error: Error) {
-    return { hasError: true, error };
-  }
-
+  static getDerivedStateFromError(error: Error) { return { hasError: true, error }; }
   render() {
     if (this.state.hasError) {
       return (
@@ -79,13 +76,13 @@ function MainLayout({ children }: { children: React.ReactNode }) {
             <div className="absolute top-0 right-0 w-[600px] h-[600px] bg-violet-600/4 rounded-full blur-[140px]" />
             <div className="absolute bottom-0 left-1/3 w-[500px] h-[500px] bg-cyan-500/3 rounded-full blur-[120px]" />
           </div>
-
-          <header className="flex h-14 shrink-0 items-center gap-3 border-b border-white/5 px-4 backdrop-blur-xl z-10 sticky top-0"
-            style={{ background: "hsl(230,25%,5%,0.85)" }}>
+          <header
+            className="flex h-14 shrink-0 items-center gap-3 border-b border-white/5 px-4 backdrop-blur-xl z-10 sticky top-0"
+            style={{ background: "hsl(230,25%,5%,0.85)" }}
+          >
             <SidebarTrigger className="text-zinc-500 hover:text-zinc-200 transition-colors h-8 w-8" />
             <div className="flex-1" />
           </header>
-
           <main className="flex-1 overflow-auto p-5 md:p-7 z-0 relative">
             {children}
           </main>
@@ -97,6 +94,26 @@ function MainLayout({ children }: { children: React.ReactNode }) {
 
 function ProtectedRouter() {
   const { isAuthenticated, isLoading } = useAuth();
+  const [paletteOpen, setPaletteOpen]  = useState(false);
+
+  // ⌘K / Ctrl+K global shortcut
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k" && isAuthenticated) {
+        e.preventDefault();
+        setPaletteOpen(p => !p);
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [isAuthenticated]);
+
+  // Custom event fired by the sidebar search button
+  useEffect(() => {
+    function onOpen() { if (isAuthenticated) setPaletteOpen(true); }
+    document.addEventListener("open-command-palette", onOpen);
+    return () => document.removeEventListener("open-command-palette", onOpen);
+  }, [isAuthenticated]);
 
   if (isLoading) {
     return (
@@ -118,7 +135,6 @@ function ProtectedRouter() {
     return (
       <Suspense fallback={<PageLoader />}>
         <Switch>
-          {/* Public share route — accessible without login */}
           <Route path="/share/:token" component={SharedReport} />
           <Route component={Landing} />
         </Switch>
@@ -127,20 +143,22 @@ function ProtectedRouter() {
   }
 
   return (
-    <MainLayout>
-      <Suspense fallback={<PageLoader />}>
-        <Switch>
-          <Route path="/" component={Dashboard} />
-          <Route path="/new" component={UrlTestPage} />
-          <Route path="/sast" component={SastPage} />
-          <Route path="/runs/:id" component={Report} />
-          <Route path="/integrations" component={Integrations} />
-          {/* Share route also available when logged in */}
-          <Route path="/share/:token" component={SharedReport} />
-          <Route component={NotFound} />
-        </Switch>
-      </Suspense>
-    </MainLayout>
+    <>
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <MainLayout>
+        <Suspense fallback={<PageLoader />}>
+          <Switch>
+            <Route path="/"             component={Dashboard}    />
+            <Route path="/new"          component={UrlTestPage}  />
+            <Route path="/sast"         component={SastPage}     />
+            <Route path="/runs/:id"     component={Report}       />
+            <Route path="/integrations" component={Integrations} />
+            <Route path="/share/:token" component={SharedReport} />
+            <Route                      component={NotFound}     />
+          </Switch>
+        </Suspense>
+      </MainLayout>
+    </>
   );
 }
 
@@ -158,11 +176,11 @@ export default function App() {
             toastOptions={{
               duration: 3500,
               classNames: {
-                toast: "border border-white/10 text-white font-sans rounded-2xl shadow-2xl backdrop-blur-xl",
+                toast:       "border border-white/10 text-white font-sans rounded-2xl shadow-2xl backdrop-blur-xl",
                 description: "text-zinc-400",
-                success: "bg-emerald-950/90 border-emerald-500/20",
-                error: "bg-red-950/90 border-red-500/20",
-                info: "bg-[hsl(230,22%,12%)]",
+                success:     "bg-emerald-950/90 border-emerald-500/20",
+                error:       "bg-red-950/90 border-red-500/20",
+                info:        "bg-[hsl(230,22%,12%)]",
               },
             }}
           />
