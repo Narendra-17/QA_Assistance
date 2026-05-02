@@ -133,9 +133,28 @@ app.use(globalLimiter);
 // ── Authentication ────────────────────────────────────────────────────────────
 app.use(authMiddleware);
 
-// ── Per-route rate limits ─────────────────────────────────────────────────────
-app.use("/api/qa/runs", analysisLimiter);
-app.use("/api/qa/sast", analysisLimiter);
+// ── Per-route rate limits — ONLY expensive AI write operations ────────────────
+// IMPORTANT: Do NOT use app.use() here — that would rate-limit GET reads too,
+// including the report page's 3-second polling loop which would hit 10/min
+// in under 30 seconds.  Use app.post() to scope to write operations only.
+//
+//   POST /api/qa/runs              → URL scan (calls GPT-4o)
+//   POST /api/qa/sast              → SAST scan (calls GPT-4o)
+//   POST /api/qa/runs/:id/generate-fix → AI code fix (calls GPT-4o)
+//
+const fixLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req: Request, res: Response) => {
+    logSecurityEvent("RATE_LIMITED", req, "fix generator limiter");
+    res.status(429).json({ error: "Fix generation rate limit reached. Up to 20 per minute." });
+  },
+});
+app.post("/api/qa/runs", analysisLimiter);
+app.post("/api/qa/sast", analysisLimiter);
+app.post("/api/qa/runs/:id/generate-fix", fixLimiter);
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use("/api", router);

@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { db } from "@workspace/db";
 import { qaRunsTable, shareTokensTable, issueStatusesTable } from "@workspace/db/schema";
-import { eq, and, desc, gt, asc } from "drizzle-orm";
+import { eq, and, desc, gt, asc, count } from "drizzle-orm";
 import { z } from "zod";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import multer from "multer";
@@ -22,6 +22,12 @@ import { apiKeyAuth } from "../lib/api-key-auth";
 import { buildSarif } from "../lib/sarif";
 
 const router = Router();
+
+// ─── Per-user limits ──────────────────────────────────────────────────────────
+const MAX_RUNS_PER_USER = 500;
+// Cap individual file content sent to the AI: limits prompt-injection surface
+// and prevents context-window overflow (~5k tokens per file at ~4 chars/token)
+const MAX_FILE_CHARS = 20_000;
 
 // Allow either session auth OR API key auth
 function isAuthed(req: Request): boolean {
@@ -441,6 +447,11 @@ router.post("/runs", async (req: Request, res: Response) => {
   }
 
   try {
+    const [{ runCount }] = await db.select({ runCount: count() }).from(qaRunsTable).where(eq(qaRunsTable.userId, userId));
+    if (runCount >= MAX_RUNS_PER_USER) {
+      return void res.status(429).json({ error: `Scan limit reached (${MAX_RUNS_PER_USER} scans). Delete old runs to continue.` });
+    }
+
     const [run] = await db
       .insert(qaRunsTable)
       .values({ userId, runType: "url", appUrl, appDescription, status: "running" })
@@ -498,7 +509,9 @@ router.post("/sast", upload.array("files", 30), async (req: Request, res: Respon
     })
     .map(f => ({
       name: sanitizeFilename(f.originalname),
-      content: f.buffer.toString("utf-8").replace(/\0/g, ""),
+      // Truncate to MAX_FILE_CHARS to cap prompt-injection surface and prevent
+      // AI context-window overflow.  5 MB files would otherwise pass verbatim.
+      content: f.buffer.toString("utf-8").replace(/\0/g, "").slice(0, MAX_FILE_CHARS),
     }))
     .filter(f => f.content.trim().length > 0);
 
@@ -510,6 +523,11 @@ router.post("/sast", upload.array("files", 30), async (req: Request, res: Respon
   }
 
   try {
+    const [{ runCount: sastCount }] = await db.select({ runCount: count() }).from(qaRunsTable).where(eq(qaRunsTable.userId, userId));
+    if (sastCount >= MAX_RUNS_PER_USER) {
+      return void res.status(429).json({ error: `Scan limit reached (${MAX_RUNS_PER_USER} scans). Delete old runs to continue.` });
+    }
+
     const [run] = await db
       .insert(qaRunsTable)
       .values({ userId, runType: "sast", projectName, appDescription: description, status: "running" })
@@ -791,6 +809,9 @@ router.post("/runs/:id/generate-fix", async (req: Request, res: Response) => {
   const issue = report.issues?.[issueIndex] as Record<string, unknown> | undefined;
   if (!issue) return void res.status(404).json({ error: "Issue not found" });
 
+  const fixController = new AbortController();
+  const fixTimeout = setTimeout(() => fixController.abort(), 30_000);
+
   try {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
@@ -821,11 +842,16 @@ Respond with ONLY valid JSON:
       response_format: { type: "json_object" },
       temperature: 0.15,
       max_tokens: 1500,
-    });
+    }, { signal: fixController.signal });
 
+    clearTimeout(fixTimeout);
     const result = JSON.parse(completion.choices[0].message.content ?? "{}");
     res.json(result);
-  } catch {
+  } catch (err) {
+    clearTimeout(fixTimeout);
+    if (err instanceof Error && err.name === "AbortError") {
+      return void res.status(504).json({ error: "Fix generation timed out. Please try again." });
+    }
     res.status(500).json({ error: "Failed to generate fix" });
   }
 });
