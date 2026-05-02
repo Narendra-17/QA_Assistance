@@ -328,8 +328,10 @@ export function detectSecrets(
 
     // ── Pattern-based detection ─────────────────────────────────────────────
     for (const pattern of PATTERNS) {
-      // Clone the regex to reset lastIndex for global patterns
-      const re = new RegExp(pattern.regex.source, pattern.regex.flags.replace("g", "") + "gm");
+      // Build a deduplicated flag string: always include g+m, preserve i if present
+      const baseFlags = pattern.regex.flags.replace(/[gm]/g, "");
+      const flags = `${baseFlags}gm`.split("").filter((c, i, a) => a.indexOf(c) === i).join("");
+      const re = new RegExp(pattern.regex.source, flags);
       let match: RegExpExecArray | null;
       while ((match = re.exec(file.content)) !== null) {
         // Find the line number
