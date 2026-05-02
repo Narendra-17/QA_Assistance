@@ -1,5 +1,5 @@
 import { useCreateQaRun, useCreateSastRun } from "@workspace/api-client-react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -82,12 +82,17 @@ const CODE_TYPES = [
 
 export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "sast" }) {
   const [, setLocation] = useLocation();
-  const [tab, setTab] = useState<"url" | "sast">(initialTab);
+  const search = useSearch();
+  const searchParams = new URLSearchParams(search);
+  const prefillUrl = searchParams.get("url") ?? "";
+  const prefillDesc = searchParams.get("desc") ?? "";
+
+  const [tab, setTab] = useState<"url" | "sast">(prefillUrl ? "url" : initialTab);
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const urlForm = useForm<UrlForm>({ resolver: zodResolver(urlSchema), defaultValues: { appUrl: "", appDescription: "" } });
+  const urlForm = useForm<UrlForm>({ resolver: zodResolver(urlSchema), defaultValues: { appUrl: prefillUrl, appDescription: prefillDesc } });
   const sastForm = useForm<SastForm>({ resolver: zodResolver(sastSchema), defaultValues: { projectName: "", description: "" } });
 
   const descValue = urlForm.watch("appDescription");

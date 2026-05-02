@@ -6,7 +6,7 @@ import {
   Copy, Download, Globe, FileCode2, Loader2, XCircle,
   TrendingUp, BarChart3, RotateCcw, ChevronDown, ChevronUp,
   Share2, FileText, Shield, Clock, Check, Eye, X, Zap,
-  Wand2, Target, Swords, Layers,
+  Wand2, Target, Swords, Layers, Search, Bell, History,
 } from "lucide-react";
 import { PieChart, Pie, Cell, Tooltip as RechartTooltip, ResponsiveContainer } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -837,12 +837,14 @@ export default function Report() {
   const [, setLocation] = useLocation();
   const [pollingEnabled, setPollingEnabled] = useState(true);
   const [filterSev, setFilterSev] = useState<"all" | SevKey>("all");
+  const [issueSearch, setIssueSearch] = useState("");
   const [expandedIssue, setExpandedIssue] = useState<number | null>(null);
   const [showShareModal, setShowShareModal] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [fixLoading, setFixLoading] = useState<Record<number, boolean>>({});
   const [fixResults, setFixResults] = useState<Record<number, { fixCode: string; explanation: string; language: string; testSuggestion: string }>>({});
   const queryClient = useQueryClient();
+  const prevStatusRef = useRef<string | undefined>(undefined);
 
   const { data: run, isLoading } = (useGetQaRun as any)(id!, {
     query: { refetchInterval: pollingEnabled ? 3000 : false, staleTime: 0 },
@@ -851,6 +853,60 @@ export default function Report() {
   useEffect(() => {
     if (run?.status === "completed" || run?.status === "failed") setPollingEnabled(false);
   }, [run?.status]);
+
+  // Browser notification when scan finishes
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = run?.status;
+    if (
+      prev && (prev === "running" || prev === "pending") &&
+      (run?.status === "completed" || run?.status === "failed")
+    ) {
+      if ("Notification" in window && Notification.permission === "granted") {
+        const title = run.status === "completed" ? "Scan Complete — QA Assistant" : "Scan Failed — QA Assistant";
+        const body = run.status === "completed"
+          ? `${run.appUrl ?? run.projectName ?? "Assessment"} scored ${(run.report as Report | null)?.overallScore ?? "?"}/100`
+          : `${run.appUrl ?? run.projectName ?? "Assessment"} failed to complete`;
+        new Notification(title, { body, icon: `${import.meta.env.BASE_URL}favicon.ico` });
+      }
+    }
+  }, [run?.status]);
+
+  // Request notification permission when scan starts
+  useEffect(() => {
+    if (
+      (run?.status === "running" || run?.status === "pending") &&
+      "Notification" in window && Notification.permission === "default"
+    ) {
+      Notification.requestPermission();
+    }
+  }, [run?.status]);
+
+  // Stats for same-target run history
+  const target = run?.appUrl ?? run?.projectName;
+  const targetLabel = useMemo(() => {
+    if (!target) return null;
+    if (run?.appUrl) { try { return new URL(run.appUrl).hostname; } catch { return run.appUrl; } }
+    return run?.projectName ?? null;
+  }, [target, run?.appUrl, run?.projectName]);
+
+  const { data: historyData } = useQuery<{ scoreHistory: Array<{ id: string; score: number; runType: string; createdAt: string; label: string }> }>({
+    queryKey: ["stats-history"],
+    queryFn: async () => {
+      const resp = await fetch("/api/qa/stats");
+      if (!resp.ok) return { scoreHistory: [] };
+      return resp.json();
+    },
+    enabled: run?.status === "completed" && !!targetLabel,
+    staleTime: 30_000,
+  });
+
+  const sameTargetHistory = useMemo(() => {
+    if (!historyData?.scoreHistory || !targetLabel) return [];
+    return historyData.scoreHistory
+      .filter(r => r.id !== id && r.label === targetLabel)
+      .slice(-6);
+  }, [historyData, targetLabel, id]);
 
   // Issue statuses
   const { data: statusData, refetch: refetchStatuses } = useQuery<{ statuses: IssueStatus[] }>({
@@ -885,7 +941,13 @@ export default function Report() {
 
   const report = run?.report as Report | null | undefined;
   const allIssues = report?.issues ?? [];
-  const issues = filterSev === "all" ? allIssues : allIssues.filter(i => i.severity === filterSev);
+  const issues = (filterSev === "all" ? allIssues : allIssues.filter(i => i.severity === filterSev))
+    .filter(i => {
+      if (!issueSearch.trim()) return true;
+      const q = issueSearch.toLowerCase();
+      return [i.title, i.description, i.possibleCause, i.filePath ?? "", i.owasp ?? ""]
+        .some(t => t.toLowerCase().includes(q));
+    });
 
   const copyReport = useCallback(() => {
     if (!report) return;
@@ -912,6 +974,89 @@ export default function Report() {
     a.click();
     URL.revokeObjectURL(a.href);
     toast.success("JSON exported");
+  }, [report, run]);
+
+  const downloadMarkdown = useCallback(() => {
+    if (!report || !run) return;
+    const counts: Record<SevKey, number> = { critical: 0, high: 0, medium: 0, low: 0 };
+    report.issues.forEach(i => { if (i.severity in counts) counts[i.severity as SevKey]++; });
+    const grade = report.overallScore >= 90 ? "A+" : report.overallScore >= 80 ? "A" : report.overallScore >= 70 ? "B" : report.overallScore >= 60 ? "C" : report.overallScore >= 40 ? "D" : "F";
+    const sevEmoji: Record<string, string> = { critical: "🚨", high: "⚠️", medium: "🔶", low: "ℹ️" };
+    const effortMap: Record<string, string> = { low: "< 2 hours", medium: "~1 day", high: "Multiple days" };
+
+    const lines: string[] = [
+      `# Security Assessment Report`,
+      ``,
+      `> Generated by **QA Assistant** on ${format(new Date(run.createdAt), "MMMM d, yyyy · h:mm a")}`,
+      ``,
+      `| Field | Value |`,
+      `|-------|-------|`,
+      `| **Target** | ${run.appUrl ?? run.projectName ?? "Assessment"} |`,
+      `| **Score** | ${report.overallScore}/100 (Grade ${grade}) |`,
+      `| **Scan type** | ${run.runType === "url" ? "DAST — Live URL Test" : "SAST — Static Code Analysis"} |`,
+      `| **Issues** | ${report.issues.length} total · ${counts.critical} critical · ${counts.high} high · ${counts.medium} medium · ${counts.low} low |`,
+      ``,
+      `---`,
+      ``,
+      `## Executive Summary`,
+      ``,
+      report.summary,
+      ``,
+      `---`,
+      ``,
+      `## Issues (${report.issues.length})`,
+      ``,
+    ];
+
+    report.issues.forEach((issue, i) => {
+      const owaspCode = getIssueOwaspCode(issue);
+      const owaspCat = OWASP_CATS.find(c => c.id === owaspCode);
+      lines.push(`### ${sevEmoji[issue.severity] ?? "•"} ${i + 1}. ${issue.title}`);
+      lines.push(``);
+      lines.push(`**Severity:** ${issue.severity.toUpperCase()}`);
+      if (issue.filePath) lines.push(`**File:** \`${issue.filePath}${issue.lineNumber ? `:${issue.lineNumber}` : ""}\``);
+      lines.push(`**OWASP:** ${owaspCode}${owaspCat ? ` — ${owaspCat.name}` : ""}`);
+      if (issue.effortLevel) lines.push(`**Effort:** ${effortMap[issue.effortLevel] ?? issue.effortLevel}`);
+      if (issue.detectionMethod === "deterministic") lines.push(`**Detection:** Secrets Scanner (deterministic)`);
+      else if (issue.detectionMethod === "sca-osv") lines.push(`**Detection:** SCA / OSV CVE Database`);
+      lines.push(``);
+      lines.push(`**Description:** ${issue.description}`);
+      lines.push(``);
+      lines.push(`**Root cause:** ${issue.possibleCause}`);
+      lines.push(``);
+      lines.push(`**Suggested fix:** ${issue.suggestedFix}`);
+      lines.push(``);
+      if (issue.codeSnippet) {
+        lines.push(`**Vulnerable code:**`);
+        lines.push(``);
+        lines.push("```");
+        lines.push(issue.codeSnippet);
+        lines.push("```");
+        lines.push(``);
+      }
+      lines.push(`---`);
+      lines.push(``);
+    });
+
+    if (report.recommendations.length > 0) {
+      lines.push(`## Strategic Recommendations`);
+      lines.push(``);
+      report.recommendations.forEach((rec, i) => lines.push(`${i + 1}. ${rec}`));
+      lines.push(``);
+      lines.push(`---`);
+      lines.push(``);
+    }
+
+    lines.push(`*Report ID: \`${run.id}\` · Powered by QA Assistant*`);
+
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    const slug = (run.appUrl ?? run.projectName ?? run.id).replace(/[^a-z0-9]/gi, "-").slice(0, 40);
+    a.download = `qa-report-${slug}.md`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast.success("Markdown report downloaded");
   }, [report, run]);
 
   const handleExportPdf = useCallback(async () => {
@@ -966,7 +1111,14 @@ export default function Report() {
 
   function handleRerun() {
     if (!run) return;
-    setLocation(run.runType === "url" ? "/new" : "/sast");
+    if (run.runType === "url" && run.appUrl) {
+      const params = new URLSearchParams();
+      params.set("url", run.appUrl);
+      if (run.appDescription) params.set("desc", run.appDescription);
+      setLocation(`/new?${params.toString()}`);
+    } else {
+      setLocation(run.runType === "url" ? "/new" : "/sast");
+    }
   }
 
   function handleStatusUpdate(index: number, status: IssueStatus["status"]) {
@@ -1050,6 +1202,10 @@ export default function Report() {
                   className="border-white/10 bg-white/4 hover:bg-white/8 text-white rounded-xl h-9 gap-1.5">
                   <Download className="w-3.5 h-3.5" />JSON
                 </Button>
+                <Button variant="outline" size="sm" onClick={downloadMarkdown}
+                  className="border-white/10 bg-white/4 hover:bg-white/8 text-white rounded-xl h-9 gap-1.5">
+                  <FileText className="w-3.5 h-3.5 text-emerald-400" />Markdown
+                </Button>
                 <Button variant="outline" size="sm" onClick={handleExportPdf} disabled={exportingPdf}
                   className="border-white/10 bg-white/4 hover:bg-white/8 text-white rounded-xl h-9 gap-1.5">
                   {exportingPdf ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
@@ -1112,6 +1268,57 @@ export default function Report() {
               </div>
             </div>
 
+            {/* Previous scans for this target */}
+            {sameTargetHistory.length > 0 && (
+              <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
+                className="p-4 rounded-2xl border border-white/7 bg-white/2">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-6 h-6 rounded-md bg-violet-500/12 border border-violet-500/20 flex items-center justify-center shrink-0">
+                    <History className="w-3 h-3 text-violet-400" />
+                  </div>
+                  <p className="text-xs font-semibold text-white">Score History for this Target</p>
+                  <span className="text-[10px] text-zinc-500 ml-1">{sameTargetHistory.length} previous scan{sameTargetHistory.length !== 1 ? "s" : ""}</span>
+                  <button onClick={handleRerun}
+                    className="ml-auto flex items-center gap-1 text-[11px] text-violet-400 hover:text-violet-300 transition-colors font-medium">
+                    <RotateCcw className="w-3 h-3" />Re-scan
+                  </button>
+                </div>
+                <div className="flex items-end gap-1.5 h-12">
+                  {sameTargetHistory.map((r, i) => {
+                    const pct = Math.max(8, r.score);
+                    const col = r.score >= 80 ? "#10B981" : r.score >= 60 ? "#F59E0B" : r.score >= 40 ? "#F97316" : "#EF4444";
+                    const isCurrent = i === sameTargetHistory.length - 1;
+                    return (
+                      <Link key={r.id} href={`/runs/${r.id}`}>
+                        <div className="flex flex-col items-center gap-1 group cursor-pointer" title={`${format(new Date(r.createdAt), "MMM d")} — Score: ${r.score}`}>
+                          <div className="text-[9px] font-bold opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: col }}>{r.score}</div>
+                          <div className="w-6 rounded-t-sm transition-all group-hover:opacity-100"
+                            style={{ height: `${(pct / 100) * 36}px`, background: col, opacity: isCurrent ? 1 : 0.4 }} />
+                        </div>
+                      </Link>
+                    );
+                  })}
+                  {/* Current run bar (highlighted) */}
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="text-[9px] font-bold" style={{ color: report.overallScore >= 80 ? "#10B981" : report.overallScore >= 60 ? "#F59E0B" : report.overallScore >= 40 ? "#F97316" : "#EF4444" }}>
+                      {report.overallScore}
+                    </div>
+                    <div className="w-6 rounded-t-sm relative"
+                      style={{
+                        height: `${Math.max(8, report.overallScore) / 100 * 36}px`,
+                        background: report.overallScore >= 80 ? "#10B981" : report.overallScore >= 60 ? "#F59E0B" : report.overallScore >= 40 ? "#F97316" : "#EF4444",
+                        boxShadow: `0 0 8px ${report.overallScore >= 80 ? "#10B981" : report.overallScore >= 60 ? "#F59E0B" : "#EF4444"}60`,
+                      }} />
+                  </div>
+                  <div className="ml-2 flex flex-col justify-end">
+                    <span className="text-[10px] text-zinc-500">← older</span>
+                    <span className="text-[10px] text-violet-400 font-medium">now</span>
+                  </div>
+                </div>
+                <p className="text-[10px] text-zinc-600 mt-2">Click a bar to view that report · Current scan highlighted</p>
+              </motion.div>
+            )}
+
             {/* Deterministic findings banner */}
             {report.deterministicFindings && (report.deterministicFindings.secretsFound > 0 || report.deterministicFindings.vulnerableDepsFound > 0) && (
               <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
@@ -1153,28 +1360,51 @@ export default function Report() {
             <IntelligencePanel report={report as AugmentedReport} issues={allIssues} />
 
             {/* Filter row */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <BarChart3 className="w-3.5 h-3.5 text-zinc-500" />
-              <span className="text-xs text-zinc-500 font-medium">Filter by severity:</span>
-              {(["all", "critical", "high", "medium", "low"] as const).map((s) => {
-                const cfg = s === "all" ? null : SEV_CONFIG[s];
-                const count = s === "all" ? allIssues.length : allIssues.filter(i => i.severity === s).length;
-                return (
-                  <button key={s} onClick={() => setFilterSev(s)}
-                    className={["px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all border",
-                      filterSev === s && s === "all" ? "bg-violet-600 text-white border-violet-600" : "",
-                      filterSev !== s ? "bg-white/4 text-zinc-400 border-white/8 hover:border-white/16 hover:text-zinc-200" : "",
-                    ].join(" ")}
-                    style={filterSev === s && cfg ? { background: cfg.bg, color: cfg.color, borderColor: cfg.border } : {}}>
-                    {s === "all" ? `All (${count})` : `${cfg!.label} (${count})`}
-                  </button>
-                );
-              })}
-
-              <div className="ml-auto flex items-center gap-1.5 text-[11px] text-zinc-500">
-                <Shield className="w-3 h-3" />
-                <span>Click an issue to expand · Mark status to track remediation</span>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <BarChart3 className="w-3.5 h-3.5 text-zinc-500" />
+                <span className="text-xs text-zinc-500 font-medium">Filter by severity:</span>
+                {(["all", "critical", "high", "medium", "low"] as const).map((s) => {
+                  const cfg = s === "all" ? null : SEV_CONFIG[s];
+                  const count = s === "all" ? allIssues.length : allIssues.filter(i => i.severity === s).length;
+                  return (
+                    <button key={s} onClick={() => setFilterSev(s)}
+                      className={["px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all border",
+                        filterSev === s && s === "all" ? "bg-violet-600 text-white border-violet-600" : "",
+                        filterSev !== s ? "bg-white/4 text-zinc-400 border-white/8 hover:border-white/16 hover:text-zinc-200" : "",
+                      ].join(" ")}
+                      style={filterSev === s && cfg ? { background: cfg.bg, color: cfg.color, borderColor: cfg.border } : {}}>
+                      {s === "all" ? `All (${count})` : `${cfg!.label} (${count})`}
+                    </button>
+                  );
+                })}
+                <div className="ml-auto flex items-center gap-1.5 text-[11px] text-zinc-500">
+                  <Shield className="w-3 h-3" />
+                  <span className="hidden sm:block">Click an issue to expand · Mark status to track remediation</span>
+                </div>
               </div>
+              {/* Issue search */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500 pointer-events-none" />
+                <input
+                  type="text"
+                  value={issueSearch}
+                  onChange={e => { setIssueSearch(e.target.value); setExpandedIssue(null); }}
+                  placeholder="Search issues by title, description, file path, or OWASP category…"
+                  className="w-full pl-9 pr-9 py-2 rounded-xl bg-white/4 border border-white/8 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:border-violet-500/40 focus:bg-white/6 transition-all"
+                />
+                {issueSearch && (
+                  <button onClick={() => setIssueSearch("")}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+              {issueSearch && (
+                <p className="text-[11px] text-zinc-500">
+                  {issues.length === 0 ? "No issues match your search." : `Showing ${issues.length} of ${allIssues.length} issue${allIssues.length !== 1 ? "s" : ""}`}
+                </p>
+              )}
             </div>
 
             {/* Issues */}

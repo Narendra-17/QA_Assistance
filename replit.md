@@ -2,7 +2,7 @@
 
 ## Overview
 
-AI-powered QA Assistant web app. Users log in, submit app URLs or upload source files, and receive AI-generated security reports with bug severities, root causes, fix suggestions, OWASP Top 10 mapping, effort estimates, attack chain narratives, and one-click AI code fixes. Features a premium deep-space UI, animated starfield landing page with typewriter hero + live terminal scan demo, Cmd+K command palette, animated stat counters, severity breakdown bars on run cards, recent scans in the sidebar, CI/CD integration via GitHub Actions, a full issue lifecycle workflow, and a security score trend chart.
+AI-powered QA Assistant web app. Users log in, submit app URLs or upload source files, and receive AI-generated security reports with bug severities, root causes, fix suggestions, OWASP Top 10 mapping, effort estimates, attack chain narratives, and one-click AI code fixes. Features a premium deep-space UI, animated starfield landing page with typewriter hero + live terminal scan demo, Cmd+K command palette, animated stat counters, severity breakdown bars on run cards, recent scans in the sidebar, CI/CD integration via GitHub Actions, a full issue lifecycle workflow, security score trend chart, smart re-scan (URL pre-fill), Markdown report export, browser scan-complete notifications, full-text issue search, and per-target score history bars.
 
 ## Stack
 
