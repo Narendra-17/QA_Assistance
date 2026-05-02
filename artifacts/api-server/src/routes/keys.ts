@@ -59,7 +59,7 @@ router.post("/keys", requireSession, async (req: Request, res: Response) => {
   const keyHash = hashApiKey(rawKey);
   const keyPrefix = rawKey.slice(0, 12); // "qak_" + 8 chars
 
-  const sanitizedName = sanitizeAndLimit(name, 80);
+  const sanitizedName = sanitizeAndLimit(name, 80, "name");
 
   const expiresAt = expiresInDays
     ? new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000)

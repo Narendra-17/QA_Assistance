@@ -318,7 +318,7 @@ const issueStatusSchema = z.object({
 // ─── Runs ─────────────────────────────────────────────────────────────────────
 
 router.get("/runs", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) {
+  if (!isAuthed(req)) {
     logSecurityEvent("AUTH_MISSING", req, "GET /runs");
     return void res.status(401).json({ error: "Authentication required" });
   }
@@ -342,7 +342,7 @@ router.get("/runs", async (req: Request, res: Response) => {
 });
 
 router.get("/stats", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) {
+  if (!isAuthed(req)) {
     logSecurityEvent("AUTH_MISSING", req, "GET /stats");
     return void res.status(401).json({ error: "Authentication required" });
   }
@@ -495,7 +495,7 @@ router.post("/sast", upload.array("files", 30), async (req: Request, res: Respon
 });
 
 router.get("/runs/:id", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) {
+  if (!isAuthed(req)) {
     logSecurityEvent("AUTH_MISSING", req, `GET /runs/${req.params.id}`);
     return void res.status(401).json({ error: "Authentication required" });
   }
@@ -518,7 +518,7 @@ router.get("/runs/:id", async (req: Request, res: Response) => {
 });
 
 router.delete("/runs/:id", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) {
+  if (!isAuthed(req)) {
     logSecurityEvent("AUTH_MISSING", req, `DELETE /runs/${req.params.id}`);
     return void res.status(401).json({ error: "Authentication required" });
   }
@@ -544,7 +544,7 @@ router.delete("/runs/:id", async (req: Request, res: Response) => {
 // ─── Share tokens ─────────────────────────────────────────────────────────────
 
 router.post("/runs/:id/share", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) {
+  if (!isAuthed(req)) {
     logSecurityEvent("AUTH_MISSING", req, `POST /runs/${req.params.id}/share`);
     return void res.status(401).json({ error: "Authentication required" });
   }
@@ -648,7 +648,7 @@ router.get("/runs/:id/sarif", async (req: Request, res: Response) => {
 // ─── Issue lifecycle ──────────────────────────────────────────────────────────
 
 router.get("/runs/:id/issue-statuses", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) {
+  if (!isAuthed(req)) {
     logSecurityEvent("AUTH_MISSING", req, `GET /runs/${req.params.id}/issue-statuses`);
     return void res.status(401).json({ error: "Authentication required" });
   }
@@ -673,7 +673,7 @@ router.get("/runs/:id/issue-statuses", async (req: Request, res: Response) => {
 });
 
 router.patch("/runs/:id/issues/:index/status", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) {
+  if (!isAuthed(req)) {
     logSecurityEvent("AUTH_MISSING", req, `PATCH /runs/${req.params.id}/issues/${req.params.index}/status`);
     return void res.status(401).json({ error: "Authentication required" });
   }

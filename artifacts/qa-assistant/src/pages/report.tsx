@@ -79,7 +79,7 @@ const GLOSSARY: Record<string, string> = {
   "command injection": "Injecting OS commands into shell calls in your code, giving attackers system access.",
   "prototype pollution": "Modifying JavaScript's Object prototype to affect all objects in the application.",
   "deserialization": "Converting data back into objects — insecure deserialization can lead to remote code execution.",
-  "IDOR": "Insecure Direct Object Reference — accessing another user's data by manipulating IDs.",
+  "OWASP": "Open Worldwide Application Security Project — the standard framework for classifying web vulnerabilities.",
   "CSP": "Content Security Policy — a browser mechanism that restricts which scripts and resources can load.",
   "HSTS": "HTTP Strict Transport Security — forces browsers to always use HTTPS for your domain.",
   "CVSS": "Common Vulnerability Scoring System — a 0-10 scale for rating vulnerability severity.",
@@ -741,6 +741,23 @@ export default function Report() {
     }
   }, [report, run, exportingPdf]);
 
+  const downloadSarif = useCallback(async () => {
+    if (!run) return;
+    try {
+      const resp = await fetch(`/api/qa/runs/${run.id}/sarif`);
+      if (!resp.ok) throw new Error("Failed to fetch SARIF");
+      const blob = await resp.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `qa-${run.id.slice(0, 8)}.sarif`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast.success("SARIF exported — ready for GitHub Code Scanning");
+    } catch {
+      toast.error("Failed to download SARIF report");
+    }
+  }, [run]);
+
   function handleRerun() {
     if (!run) return;
     setLocation(run.runType === "url" ? "/new" : "/sast");
@@ -832,6 +849,12 @@ export default function Report() {
                   {exportingPdf ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
                   PDF
                 </Button>
+                {run.runType === "sast" && (
+                  <Button variant="outline" size="sm" onClick={downloadSarif}
+                    className="border-white/10 bg-white/4 hover:bg-white/8 text-white rounded-xl h-9 gap-1.5">
+                    <Shield className="w-3.5 h-3.5" />SARIF
+                  </Button>
+                )}
                 <Button size="sm" onClick={() => setShowShareModal(true)}
                   className="bg-violet-600 hover:bg-violet-500 text-white rounded-xl h-9 gap-1.5">
                   <Share2 className="w-3.5 h-3.5" />Share

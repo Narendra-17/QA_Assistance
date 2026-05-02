@@ -64,7 +64,7 @@ export default function Dashboard() {
   const [search, setSearch] = useState("");
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
-  const { data, isLoading } = useListQaRuns({ query: { staleTime: 10000 } });
+  const { data, isLoading } = useListQaRuns();
   const { data: stats, isLoading: statsLoading } = useGetQaStats();
   const deleteMutation = useDeleteQaRun();
   const queryClient = useQueryClient();

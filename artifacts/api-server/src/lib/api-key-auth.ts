@@ -4,7 +4,7 @@
  * Used to allow CI/CD pipelines (GitHub Actions, CLI) to call the API.
  */
 
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { type Request, type Response, type NextFunction } from "express";
 import { db } from "@workspace/db";
 import { apiKeysTable } from "@workspace/db/schema";
@@ -13,10 +13,9 @@ import { eq } from "drizzle-orm";
 
 const KEY_PREFIX = "qak_";
 
-/** Generate a new API key: prefix + 32 random hex chars */
+/** Generate a new API key: prefix + 32 random hex chars (64 hex chars total) */
 export function generateApiKey(): string {
-  const { randomBytes } = require("crypto");
-  return KEY_PREFIX + (randomBytes(32) as Buffer).toString("hex");
+  return KEY_PREFIX + randomBytes(32).toString("hex");
 }
 
 /** Hash a raw API key for storage */
