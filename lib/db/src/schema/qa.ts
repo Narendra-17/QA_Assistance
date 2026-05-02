@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, integer, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, jsonb, integer, unique, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./auth";
@@ -60,3 +60,21 @@ export const issueStatusesTable = pgTable(
 );
 
 export type IssueStatus = typeof issueStatusesTable.$inferSelect;
+
+// ─── API Keys ─────────────────────────────────────────────────────────────────
+// Used by CI/CD pipelines (GitHub Actions, CLI) to authenticate without a session.
+// The plaintext key is shown ONCE on creation; only the SHA-256 hash is stored.
+// Key format: "qak_" + 64 hex chars (32 random bytes).
+
+export const apiKeysTable = pgTable("api_keys", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  userId: text("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  keyHash: text("key_hash").notNull().unique(),
+  keyPrefix: text("key_prefix").notNull(), // first 12 chars for display, e.g. "qak_1a2b3c4d"
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type ApiKey = typeof apiKeysTable.$inferSelect;

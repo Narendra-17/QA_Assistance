@@ -18,8 +18,18 @@ import {
 } from "../lib/security";
 import { detectSecrets, secretsToIssues } from "../lib/secrets-detector";
 import { scanDependencies, scaToIssues } from "../lib/sca-scanner";
+import { apiKeyAuth } from "../lib/api-key-auth";
+import { buildSarif } from "../lib/sarif";
 
 const router = Router();
+
+// Allow either session auth OR API key auth
+function isAuthed(req: Request): boolean {
+  return !!(req.isAuthenticated?.() || req.user);
+}
+
+// Apply API key auth middleware so Bearer qak_... tokens populate req.user
+router.use(apiKeyAuth);
 
 // ─── Upload config ───────────────────────────────────────────────────────────
 const upload = multer({
@@ -370,7 +380,7 @@ router.get("/stats", async (req: Request, res: Response) => {
 });
 
 router.post("/runs", async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) {
+  if (!isAuthed(req)) {
     logSecurityEvent("AUTH_MISSING", req, "POST /runs");
     return void res.status(401).json({ error: "Authentication required" });
   }
@@ -416,7 +426,7 @@ router.post("/runs", async (req: Request, res: Response) => {
 });
 
 router.post("/sast", upload.array("files", 30), async (req: Request, res: Response) => {
-  if (!req.isAuthenticated()) {
+  if (!isAuthed(req)) {
     logSecurityEvent("AUTH_MISSING", req, "POST /sast");
     return void res.status(401).json({ error: "Authentication required" });
   }
@@ -600,6 +610,39 @@ router.get("/share/:token", async (req: Request, res: Response) => {
   } catch {
     res.status(500).json({ error: "Failed to fetch shared report" });
   }
+});
+
+// ─── SARIF export ────────────────────────────────────────────────────────────
+// Returns a SARIF 2.1.0 file for GitHub Code Scanning upload.
+
+router.get("/runs/:id/sarif", async (req: Request, res: Response) => {
+  if (!isAuthed(req)) {
+    logSecurityEvent("AUTH_MISSING", req, `GET /runs/${req.params.id}/sarif`);
+    return void res.status(401).json({ error: "Authentication required" });
+  }
+
+  const id = String(req.params.id);
+  if (!isValidUuid(id)) return void res.status(400).json({ error: "Invalid run ID format" });
+
+  const userId = (req.user as { id: string }).id;
+  const [run] = await db
+    .select()
+    .from(qaRunsTable)
+    .where(and(eq(qaRunsTable.id, id), eq(qaRunsTable.userId, userId)));
+
+  if (!run) return void res.status(404).json({ error: "Run not found" });
+  if (run.status !== "completed" || !run.report) {
+    return void res.status(400).json({ error: "Run not completed yet" });
+  }
+
+  const report = run.report as { issues?: unknown[] };
+  const issues = (report.issues ?? []) as Parameters<typeof buildSarif>[0];
+  const target = run.appUrl ?? run.projectName ?? "unknown";
+  const sarif = buildSarif(issues, id, target);
+
+  res.setHeader("Content-Type", "application/sarif+json");
+  res.setHeader("Content-Disposition", `attachment; filename="qa-${id.slice(0, 8)}.sarif"`);
+  res.json(sarif);
 });
 
 // ─── Issue lifecycle ──────────────────────────────────────────────────────────

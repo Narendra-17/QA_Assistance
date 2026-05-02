@@ -15,6 +15,7 @@ const Dashboard = lazy(() => import("@/pages/dashboard"));
 const NewRun = lazy(() => import("@/pages/new-run"));
 const Report = lazy(() => import("@/pages/report"));
 const SharedReport = lazy(() => import("@/pages/shared-report"));
+const Integrations = lazy(() => import("@/pages/integrations"));
 
 function UrlTestPage() { return <NewRun initialTab="url" />; }
 function SastPage() { return <NewRun initialTab="sast" />; }
@@ -133,6 +134,7 @@ function ProtectedRouter() {
           <Route path="/new" component={UrlTestPage} />
           <Route path="/sast" component={SastPage} />
           <Route path="/runs/:id" component={Report} />
+          <Route path="/integrations" component={Integrations} />
           {/* Share route also available when logged in */}
           <Route path="/share/:token" component={SharedReport} />
           <Route component={NotFound} />
