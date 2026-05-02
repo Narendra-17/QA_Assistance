@@ -8,6 +8,10 @@ import {
   Plus, Trash2, Globe, FileCode2, AlertTriangle, TrendingUp,
   Activity, Loader2, Search, ShieldAlert, CheckCircle2,
 } from "lucide-react";
+import {
+  AreaChart, Area, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, CartesianGrid,
+} from "recharts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { motion, AnimatePresence, type Variants } from "framer-motion";
@@ -29,6 +33,73 @@ const ITEM: Variants = {
   hidden: { opacity: 0, y: 12 },
   show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 320, damping: 28 } },
 };
+
+// ─── Score Trend Chart ────────────────────────────────────────────────────────
+
+interface ScorePoint { id: string; score: number; runType: string; createdAt: string; label: string }
+
+function scoreColor(s: number) { return s >= 80 ? "#10B981" : s >= 60 ? "#F59E0B" : s >= 40 ? "#F97316" : "#EF4444"; }
+
+function ScoreTrendChart({ data }: { data: ScorePoint[] }) {
+  const chartData = data.map((d, i) => ({
+    n: `#${i + 1}`,
+    score: d.score,
+    label: d.label,
+    date: new Date(d.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    type: d.runType,
+  }));
+  const last = chartData.at(-1);
+  const first = chartData[0];
+  const delta = last && first ? last.score - first.score : 0;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-3 flex-wrap">
+        {last && (
+          <div className="flex items-center gap-2">
+            <span className="font-display font-bold text-2xl tabular-nums" style={{ color: scoreColor(last.score) }}>{last.score}</span>
+            <span className="text-zinc-500 text-sm">latest score</span>
+          </div>
+        )}
+        {Math.abs(delta) > 0 && (
+          <span className={["text-xs font-bold px-2 py-0.5 rounded-lg", delta > 0 ? "text-emerald-400 bg-emerald-500/10 border border-emerald-500/20" : "text-red-400 bg-red-500/10 border border-red-500/20"].join(" ")}>
+            {delta > 0 ? "↑" : "↓"} {Math.abs(delta)} pts vs first run
+          </span>
+        )}
+        <span className="text-zinc-600 text-[11px] ml-auto">{data.length} completed run{data.length !== 1 ? "s" : ""}</span>
+      </div>
+      <ResponsiveContainer width="100%" height={110}>
+        <AreaChart data={chartData} margin={{ top: 4, right: 4, left: -28, bottom: 0 }}>
+          <defs>
+            <linearGradient id="scoreGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#8B5CF6" stopOpacity={0.22} />
+              <stop offset="95%" stopColor="#8B5CF6" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false} />
+          <XAxis dataKey="date" tick={{ fontSize: 9, fill: "#52525b" }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+          <YAxis domain={[0, 100]} tick={{ fontSize: 9, fill: "#52525b" }} axisLine={false} tickLine={false} ticks={[0, 50, 100]} />
+          <Tooltip
+            contentStyle={{ background: "hsl(230,24%,9%)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, fontSize: 11, padding: "8px 12px" }}
+            labelStyle={{ color: "#a1a1aa", marginBottom: 4 }}
+            cursor={{ stroke: "rgba(139,92,246,0.25)", strokeWidth: 1 }}
+            formatter={(val: number, _: string, props: { payload?: { label?: string } }) => [
+              <span key="v" style={{ color: scoreColor(val), fontWeight: 700 }}>{val}/100</span>,
+              props.payload?.label ?? "",
+            ]}
+          />
+          <Area type="monotone" dataKey="score" stroke="#8B5CF6" strokeWidth={2}
+            fill="url(#scoreGrad)"
+            dot={(props: { cx?: number; cy?: number; payload?: { score: number }; index?: number }) => (
+              <circle key={props.index} cx={props.cx} cy={props.cy} r={3.5}
+                fill={scoreColor(props.payload?.score ?? 0)} strokeWidth={0} />
+            )}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
 
 function StatCard({ label, value, sub, icon: Icon, color, loading }: {
   label: string; value: string | number; sub?: string;
@@ -179,6 +250,24 @@ export default function Dashboard() {
             icon={ShieldAlert} color="#06B6D4" loading={statsLoading}
           />
         </motion.div>
+
+        {/* Score Trend Chart */}
+        {!statsLoading && ((stats as any)?.scoreHistory?.length ?? 0) >= 2 && (
+          <motion.div variants={ITEM} initial="hidden" animate="show"
+            className="p-5 rounded-2xl border border-white/8"
+            style={{ background: "linear-gradient(145deg, hsl(230,22%,7%), hsl(230,22%,6%))" }}>
+            <div className="flex items-center gap-2 mb-4">
+              <TrendingUp className="w-4 h-4 text-violet-400" />
+              <p className="text-sm font-display font-semibold text-white">Security Score Trend</p>
+              <div className="ml-auto flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-violet-500 opacity-60" />
+                <span className="w-2 h-2 rounded-full bg-violet-500 opacity-40" />
+                <span className="w-2 h-2 rounded-full bg-violet-500 opacity-20" />
+              </div>
+            </div>
+            <ScoreTrendChart data={(stats as any).scoreHistory as ScorePoint[]} />
+          </motion.div>
+        )}
 
         {/* Controls row */}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.15 }}

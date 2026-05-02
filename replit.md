@@ -2,7 +2,7 @@
 
 ## Overview
 
-AI-powered QA Assistant web app. Users log in, submit app URLs or upload source files, and receive AI-generated security reports with bug severities, root causes, and fix suggestions. Features a premium deep-space UI, CI/CD integration via GitHub Actions, and a full issue lifecycle workflow.
+AI-powered QA Assistant web app. Users log in, submit app URLs or upload source files, and receive AI-generated security reports with bug severities, root causes, fix suggestions, OWASP Top 10 mapping, effort estimates, attack chain narratives, and one-click AI code fixes. Features a premium deep-space UI, CI/CD integration via GitHub Actions, a full issue lifecycle workflow, and a security score trend chart.
 
 ## Stack
 

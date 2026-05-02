@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { db } from "@workspace/db";
 import { qaRunsTable, shareTokensTable, issueStatusesTable } from "@workspace/db/schema";
-import { eq, and, desc, gt } from "drizzle-orm";
+import { eq, and, desc, gt, asc } from "drizzle-orm";
 import { z } from "zod";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import multer from "multer";
@@ -164,16 +164,20 @@ Page data: ${pageContent}
 Respond with ONLY valid JSON:
 {
   "summary": "2-3 sentence executive summary",
+  "attackChain": "4-6 sentence narrative written entirely from an attacker's perspective in present tense. Show exactly how they would discover the app, probe for weaknesses, and chain-exploit the vulnerabilities found to achieve a goal (data theft, account takeover, etc.). Be specific — name the vulnerability types being exploited in sequence.",
   "issues": [
     {
       "title": "Issue title",
       "description": "Detailed description",
       "severity": "critical|high|medium|low",
       "possibleCause": "Root cause analysis",
-      "suggestedFix": "Actionable fix",
+      "suggestedFix": "Actionable fix with concrete steps",
       "codeSnippet": null,
       "filePath": null,
-      "lineNumber": null
+      "lineNumber": null,
+      "owasp": "A05:2021-Security Misconfiguration",
+      "effortLevel": "low",
+      "effortNote": "Add one HTTP response header"
     }
   ],
   "overallScore": <0-100>,
@@ -181,7 +185,10 @@ Respond with ONLY valid JSON:
   "testType": "url"
 }
 
-Rules: If fetch failed, base analysis on URL and description. Score = 100 - (critical×25 + high×12 + medium×5 + low×2), min 0. Include 4-10 issues covering security, performance, accessibility, UX, SEO. Sort by severity desc.`;
+Rules:
+- owasp: exactly one of A01:2021-Broken Access Control, A02:2021-Cryptographic Failures, A03:2021-Injection, A04:2021-Insecure Design, A05:2021-Security Misconfiguration, A06:2021-Vulnerable Components, A07:2021-Identification and Authentication Failures, A08:2021-Software and Data Integrity Failures, A09:2021-Security Logging and Monitoring Failures, A10:2021-Server-Side Request Forgery
+- effortLevel: "low" (< 2 hours, config change or one-liner), "medium" (half-day to 2 days), or "high" (multiple days or architectural change)
+- If fetch failed, base analysis on URL and description. Score = 100 - (critical×25 + high×12 + medium×5 + low×2), min 0. Include 4-10 issues covering security, performance, accessibility, UX, SEO. Sort by severity desc.`;
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
@@ -248,6 +255,7 @@ ANALYSIS RULES BY FILE TYPE:
 Respond with ONLY valid JSON:
 {
   "summary": "2-3 sentence executive summary",
+  "attackChain": "4-6 sentence narrative written entirely from an attacker's perspective in present tense. Show exactly how they would obtain the code, identify the most critical vulnerability, exploit it, and escalate access — chain the vulnerabilities together. Be specific about what they gain at each step.",
   "issues": [
     {
       "title": "Vulnerability title",
@@ -258,7 +266,10 @@ Respond with ONLY valid JSON:
       "codeSnippet": "Relevant vulnerable snippet (or null)",
       "filePath": "path/to/file.ext or null",
       "lineNumber": null,
-      "detectionMethod": "ai"
+      "detectionMethod": "ai",
+      "owasp": "A03:2021-Injection",
+      "effortLevel": "medium",
+      "effortNote": "Parameterize all DB queries throughout the codebase"
     }
   ],
   "overallScore": 0,
@@ -266,7 +277,9 @@ Respond with ONLY valid JSON:
   "testType": "sast"
 }
 
-Return 4-12 NEW issues only (not already listed above). Set overallScore to 0 — it will be recalculated. Sort by severity descending.`;
+- owasp: exactly one of A01:2021-Broken Access Control, A02:2021-Cryptographic Failures, A03:2021-Injection, A04:2021-Insecure Design, A05:2021-Security Misconfiguration, A06:2021-Vulnerable Components, A07:2021-Identification and Authentication Failures, A08:2021-Software and Data Integrity Failures, A09:2021-Security Logging and Monitoring Failures, A10:2021-Server-Side Request Forgery
+- effortLevel: "low" (< 2 hours), "medium" (half-day to 2 days), "high" (multiple days or architectural change)
+- Return 4-12 NEW issues only (not already listed above). Set overallScore to 0 — it will be recalculated. Sort by severity descending.`;
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
@@ -348,10 +361,18 @@ router.get("/stats", async (req: Request, res: Response) => {
   }
   const userId = (req.user as { id: string }).id;
   try {
-    const runs = await db
-      .select({ id: qaRunsTable.id, runType: qaRunsTable.runType, status: qaRunsTable.status, report: qaRunsTable.report })
-      .from(qaRunsTable)
-      .where(eq(qaRunsTable.userId, userId));
+    const [runs, historyRows] = await Promise.all([
+      db.select({ id: qaRunsTable.id, runType: qaRunsTable.runType, status: qaRunsTable.status, report: qaRunsTable.report })
+        .from(qaRunsTable).where(eq(qaRunsTable.userId, userId)),
+      db.select({
+        id: qaRunsTable.id, runType: qaRunsTable.runType,
+        createdAt: qaRunsTable.createdAt, report: qaRunsTable.report,
+        appUrl: qaRunsTable.appUrl, projectName: qaRunsTable.projectName,
+      }).from(qaRunsTable)
+        .where(and(eq(qaRunsTable.userId, userId), eq(qaRunsTable.status, "completed")))
+        .orderBy(asc(qaRunsTable.createdAt))
+        .limit(25),
+    ]);
 
     const completed = runs.filter(r => r.status === "completed");
     let totalScore = 0, criticalIssues = 0, highIssues = 0;
@@ -365,6 +386,19 @@ router.get("/stats", async (req: Request, res: Response) => {
       }
     }
 
+    const scoreHistory = historyRows.map(r => {
+      const rep = r.report as Record<string, unknown> | null;
+      let label = "Unknown";
+      try { label = r.appUrl ? new URL(r.appUrl).hostname : (r.projectName ?? "Unknown"); } catch { label = r.appUrl ?? r.projectName ?? "Unknown"; }
+      return {
+        id: r.id,
+        score: Number(rep?.overallScore ?? 0),
+        runType: r.runType,
+        createdAt: r.createdAt?.toISOString() ?? new Date().toISOString(),
+        label,
+      };
+    });
+
     res.json({
       totalRuns: runs.length,
       completedRuns: completed.length,
@@ -373,6 +407,7 @@ router.get("/stats", async (req: Request, res: Response) => {
       criticalIssues, highIssues,
       urlRuns: runs.filter(r => r.runType === "url").length,
       sastRuns: runs.filter(r => r.runType === "sast").length,
+      scoreHistory,
     });
   } catch {
     res.status(500).json({ error: "Failed to fetch stats" });
@@ -723,6 +758,75 @@ router.patch("/runs/:id/issues/:index/status", async (req: Request, res: Respons
     res.json(result);
   } catch {
     res.status(500).json({ error: "Failed to update issue status" });
+  }
+});
+
+// ─── AI Code Fix Generator ────────────────────────────────────────────────────
+// Generates a ready-to-paste, language-specific fix for a single issue.
+
+router.post("/runs/:id/generate-fix", async (req: Request, res: Response) => {
+  if (!isAuthed(req)) {
+    logSecurityEvent("AUTH_MISSING", req, `POST /runs/${req.params.id}/generate-fix`);
+    return void res.status(401).json({ error: "Authentication required" });
+  }
+
+  const id = String(req.params.id);
+  if (!isValidUuid(id)) return void res.status(400).json({ error: "Invalid run ID format" });
+
+  const { issueIndex } = req.body as { issueIndex: number };
+  if (typeof issueIndex !== "number" || issueIndex < 0 || issueIndex > 9999) {
+    return void res.status(400).json({ error: "Invalid issue index" });
+  }
+
+  const userId = (req.user as { id: string }).id;
+  const [run] = await db.select().from(qaRunsTable)
+    .where(and(eq(qaRunsTable.id, id), eq(qaRunsTable.userId, userId)));
+
+  if (!run) return void res.status(404).json({ error: "Run not found" });
+  if (run.status !== "completed" || !run.report) {
+    return void res.status(400).json({ error: "Run not completed" });
+  }
+
+  const report = run.report as { issues?: unknown[] };
+  const issue = report.issues?.[issueIndex] as Record<string, unknown> | undefined;
+  if (!issue) return void res.status(404).json({ error: "Issue not found" });
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [{
+        role: "user",
+        content: `You are a senior security engineer. Generate a precise, production-ready code fix for this vulnerability.
+
+Issue: ${String(issue.title ?? "")}
+Severity: ${String(issue.severity ?? "")}
+Description: ${String(issue.description ?? "")}
+Root Cause: ${String(issue.possibleCause ?? "")}
+Suggested Fix Direction: ${String(issue.suggestedFix ?? "")}
+${issue.filePath ? `File: ${String(issue.filePath)}` : ""}
+${issue.codeSnippet ? `Vulnerable code:\n\`\`\`\n${String(issue.codeSnippet)}\n\`\`\`` : ""}
+Scan type: ${run.runType === "sast" ? "Source code (SAST)" : "Live URL (DAST)"}
+${run.appUrl ? `URL: ${run.appUrl}` : ""}
+
+Generate a complete, ready-to-paste fix. Include imports if needed. Fix the exact vulnerability — don't just add a comment.
+
+Respond with ONLY valid JSON:
+{
+  "fixCode": "the complete code fix, properly formatted",
+  "explanation": "2-3 sentences explaining exactly what was changed and why this eliminates the vulnerability",
+  "language": "programming language name (e.g. typescript, python, javascript, yaml, bash)",
+  "testSuggestion": "one concrete test/verification step to confirm the fix works"
+}`,
+      }],
+      response_format: { type: "json_object" },
+      temperature: 0.15,
+      max_tokens: 1500,
+    });
+
+    const result = JSON.parse(completion.choices[0].message.content ?? "{}");
+    res.json(result);
+  } catch {
+    res.status(500).json({ error: "Failed to generate fix" });
   }
 });
 

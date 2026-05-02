@@ -6,7 +6,9 @@ import {
   Copy, Download, Globe, FileCode2, Loader2, XCircle,
   TrendingUp, BarChart3, RotateCcw, ChevronDown, ChevronUp,
   Share2, FileText, Shield, Clock, Check, Eye, X, Zap,
+  Wand2, Target, Swords, Layers,
 } from "lucide-react";
+import { PieChart, Pie, Cell, Tooltip as RechartTooltip, ResponsiveContainer } from "recharts";
 import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
@@ -26,6 +28,9 @@ interface Issue {
   filePath?: string | null;
   lineNumber?: number | null;
   detectionMethod?: "deterministic" | "sca-osv" | "ai";
+  owasp?: string | null;
+  effortLevel?: "low" | "medium" | "high" | null;
+  effortNote?: string | null;
 }
 
 interface Report {
@@ -96,6 +101,185 @@ const GLOSSARY: Record<string, string> = {
   "entropy": "A measure of randomness — high-entropy strings are more likely to be secrets like API keys.",
   "hardcoded": "A value written directly in source code instead of being loaded from a secure configuration.",
 };
+
+// ─── OWASP / Effort intelligence constants ────────────────────────────────────
+
+const OWASP_CATS = [
+  { id: "A01", name: "Broken Access Control",                    color: "#EF4444" },
+  { id: "A02", name: "Cryptographic Failures",                   color: "#F97316" },
+  { id: "A03", name: "Injection",                                color: "#EF4444" },
+  { id: "A04", name: "Insecure Design",                          color: "#F59E0B" },
+  { id: "A05", name: "Security Misconfiguration",                color: "#F59E0B" },
+  { id: "A06", name: "Vulnerable Components",                    color: "#F97316" },
+  { id: "A07", name: "Auth Failures",                            color: "#EF4444" },
+  { id: "A08", name: "Integrity Failures",                       color: "#F97316" },
+  { id: "A09", name: "Logging Failures",                         color: "#06B6D4" },
+  { id: "A10", name: "SSRF",                                     color: "#8B5CF6" },
+] as const;
+
+const EFFORT_CONFIG: Record<string, { label: string; color: string; bg: string; border: string }> = {
+  low:    { label: "< 2h",  color: "#10B981", bg: "rgba(16,185,129,0.09)",  border: "rgba(16,185,129,0.22)"  },
+  medium: { label: "~1d",   color: "#F59E0B", bg: "rgba(245,158,11,0.09)",  border: "rgba(245,158,11,0.22)"  },
+  high:   { label: "Days",  color: "#F97316", bg: "rgba(249,115,22,0.09)",  border: "rgba(249,115,22,0.22)"  },
+};
+
+function guessOwasp(issue: Issue): string {
+  const txt = `${issue.title} ${issue.description} ${issue.possibleCause ?? ""}`.toLowerCase();
+  if (/sql|xss|inject|template injection|code injection|command inject/.test(txt)) return "A03";
+  if (/auth|login|session|jwt|password|credential|privilege|idor|access control|broken access/.test(txt)) return "A01";
+  if (/crypto|tls|ssl|encrypt|hash|weak cipher|plaintext password|insecure hash/.test(txt)) return "A02";
+  if (/secret|hardcoded|api.key|token in code|entropy/.test(txt)) return "A02";
+  if (/cors|header|csp|debug|misconfigur|default credential|stack trace/.test(txt)) return "A05";
+  if (/dependency|cve|vulnerable component|outdated package|known vuln/.test(txt)) return "A06";
+  if (/deserialization|integrity|supply chain|unsigned/.test(txt)) return "A08";
+  if (/log|monitor|audit trail|no alerting/.test(txt)) return "A09";
+  if (/ssrf|server.side request/.test(txt)) return "A10";
+  if (/rate limit|brute force|account lockout|multi.factor/.test(txt)) return "A07";
+  return "A04";
+}
+
+function getIssueOwaspCode(issue: Issue): string {
+  if (issue.owasp) { const m = issue.owasp.match(/^(A\d{2})/); if (m) return m[1]; }
+  return guessOwasp(issue);
+}
+
+// ─── Intelligence Panel ───────────────────────────────────────────────────────
+
+interface AugmentedReport extends Report {
+  attackChain?: string | null;
+}
+
+function IntelligencePanel({ report, issues }: { report: AugmentedReport; issues: Issue[] }) {
+  const [open, setOpen] = useState(true);
+
+  const owaspCounts: Record<string, { count: number; critical: number }> = {};
+  for (const issue of issues) {
+    const code = getIssueOwaspCode(issue);
+    if (!owaspCounts[code]) owaspCounts[code] = { count: 0, critical: 0 };
+    owaspCounts[code].count++;
+    if (issue.severity === "critical" || issue.severity === "high") owaspCounts[code].critical++;
+  }
+
+  const donutData = OWASP_CATS
+    .filter(c => (owaspCounts[c.id]?.count ?? 0) > 0)
+    .map(c => ({ name: c.name, value: owaspCounts[c.id]!.count, color: c.color, id: c.id }));
+
+  const affectedCount = Object.keys(owaspCounts).length;
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+      className="rounded-2xl border border-white/8 overflow-hidden"
+      style={{ background: "linear-gradient(145deg, hsl(230,22%,7%), hsl(230,22%,6%))" }}>
+      {/* Header */}
+      <button
+        className="w-full flex items-center gap-3 px-5 py-4 hover:bg-white/2 transition-colors"
+        onClick={() => setOpen(v => !v)}>
+        <div className="w-7 h-7 rounded-lg bg-violet-500/15 border border-violet-500/22 flex items-center justify-center">
+          <Layers className="w-3.5 h-3.5 text-violet-400" />
+        </div>
+        <span className="text-sm font-display font-semibold text-white">Threat Intelligence</span>
+        <span className="text-[11px] text-zinc-500 ml-1">{affectedCount} OWASP categor{affectedCount === 1 ? "y" : "ies"} affected</span>
+        <div className="ml-auto">
+          {open ? <ChevronUp className="w-4 h-4 text-zinc-500" /> : <ChevronDown className="w-4 h-4 text-zinc-500" />}
+        </div>
+      </button>
+
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+            <div className="px-5 pb-5 space-y-4">
+
+              {/* Attack Chain Narrative */}
+              {report.attackChain && (
+                <div className="p-4 rounded-2xl border border-red-500/18 bg-red-500/5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-6 h-6 rounded-md bg-red-500/15 border border-red-500/22 flex items-center justify-center shrink-0">
+                      <Swords className="w-3 h-3 text-red-400" />
+                    </div>
+                    <p className="text-xs font-bold text-red-300 uppercase tracking-wider">Attacker's Playbook</p>
+                    <span className="ml-auto text-[9px] text-red-400/60 bg-red-500/8 border border-red-500/14 px-2 py-0.5 rounded-full font-medium">AI Threat Narrative</span>
+                  </div>
+                  <p className="text-sm text-red-200/75 leading-relaxed italic">
+                    "<AnnotatedText text={report.attackChain} />"
+                  </p>
+                </div>
+              )}
+
+              {/* OWASP matrix + donut grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-[1fr_190px] gap-4">
+                {/* OWASP Top 10 matrix */}
+                <div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Target className="w-3.5 h-3.5 text-cyan-400" />
+                    <p className="text-xs font-semibold text-white">OWASP Top 10 Coverage</p>
+                    <span className="text-[10px] text-zinc-600 ml-auto">2021 edition</span>
+                  </div>
+                  <div className="grid grid-cols-5 gap-1.5">
+                    {OWASP_CATS.map((cat) => {
+                      const cnt = owaspCounts[cat.id]?.count ?? 0;
+                      const hasCrit = (owaspCounts[cat.id]?.critical ?? 0) > 0;
+                      return (
+                        <div key={cat.id} className="p-2 rounded-xl border text-center transition-all"
+                          style={cnt > 0
+                            ? { background: `${cat.color}0D`, borderColor: `${cat.color}2A` }
+                            : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.05)" }
+                          }>
+                          <div className="text-[9px] font-bold font-mono mb-1"
+                            style={{ color: cnt > 0 ? cat.color : "#3f3f46" }}>{cat.id}</div>
+                          <div className="text-[8px] text-zinc-600 leading-tight mb-1.5 line-clamp-2 min-h-[18px]">{cat.name}</div>
+                          {cnt > 0
+                            ? <div className="text-[11px] font-bold" style={{ color: cat.color }}>
+                                {cnt}{hasCrit && <span className="text-[7px] ml-0.5">●</span>}
+                              </div>
+                            : <CheckCircle2 className="w-2.5 h-2.5 text-emerald-500/35 mx-auto" />
+                          }
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[9px] text-zinc-600 mt-2">● = contains critical/high issues</p>
+                </div>
+
+                {/* Category donut */}
+                {donutData.length > 0 && (
+                  <div className="flex flex-col">
+                    <p className="text-xs font-semibold text-white mb-2">Issue Distribution</p>
+                    <ResponsiveContainer width="100%" height={120}>
+                      <PieChart>
+                        <Pie data={donutData} cx="50%" cy="50%" innerRadius={34} outerRadius={52}
+                          paddingAngle={3} dataKey="value" stroke="none">
+                          {donutData.map((entry, i) => (
+                            <Cell key={i} fill={entry.color} fillOpacity={0.85} />
+                          ))}
+                        </Pie>
+                        <RechartTooltip
+                          contentStyle={{ background: "hsl(230,24%,9%)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, fontSize: 10 }}
+                          formatter={(val: number, name: string) => [val, name]}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="space-y-1 mt-1">
+                      {donutData.map(d => (
+                        <div key={d.id} className="flex items-center gap-1.5 text-[10px] text-zinc-400">
+                          <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: d.color }} />
+                          <span className="font-mono text-[9px] font-bold shrink-0" style={{ color: d.color }}>{d.id}</span>
+                          <span className="truncate text-zinc-500">{d.name}</span>
+                          <span className="ml-auto font-semibold shrink-0" style={{ color: d.color }}>{d.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
 
 function GlossaryTerm({ term, children }: { term: string; children: React.ReactNode }) {
   const [show, setShow] = useState(false);
@@ -656,6 +840,8 @@ export default function Report() {
   const [expandedIssue, setExpandedIssue] = useState<number | null>(null);
   const [showShareModal, setShowShareModal] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [fixLoading, setFixLoading] = useState<Record<number, boolean>>({});
+  const [fixResults, setFixResults] = useState<Record<number, { fixCode: string; explanation: string; language: string; testSuggestion: string }>>({});
   const queryClient = useQueryClient();
 
   const { data: run, isLoading } = (useGetQaRun as any)(id!, {
@@ -757,6 +943,26 @@ export default function Report() {
       toast.error("Failed to download SARIF report");
     }
   }, [run]);
+
+  const generateFix = useCallback(async (issueIndex: number) => {
+    if (fixLoading[issueIndex] || !run) return;
+    setFixLoading(prev => ({ ...prev, [issueIndex]: true }));
+    try {
+      const resp = await fetch(`/api/qa/runs/${run.id}/generate-fix`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issueIndex }),
+      });
+      if (!resp.ok) throw new Error("Failed to generate fix");
+      const data = await resp.json();
+      setFixResults(prev => ({ ...prev, [issueIndex]: data }));
+      toast.success("AI fix generated!");
+    } catch {
+      toast.error("Failed to generate fix — please try again");
+    } finally {
+      setFixLoading(prev => ({ ...prev, [issueIndex]: false }));
+    }
+  }, [run, fixLoading]);
 
   function handleRerun() {
     if (!run) return;
@@ -943,6 +1149,9 @@ export default function Report() {
               </div>
             )}
 
+            {/* Intelligence Panel */}
+            <IntelligencePanel report={report as AugmentedReport} issues={allIssues} />
+
             {/* Filter row */}
             <div className="flex items-center gap-2 flex-wrap">
               <BarChart3 className="w-3.5 h-3.5 text-zinc-500" />
@@ -1023,6 +1232,19 @@ export default function Report() {
                                   CVE/OSV
                                 </span>
                               )}
+                              {/* OWASP category badge */}
+                              <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold border font-mono hidden sm:inline-block"
+                                style={{ background: "rgba(6,182,212,0.08)", color: "#06B6D4", borderColor: "rgba(6,182,212,0.2)" }}>
+                                {getIssueOwaspCode(issue)}
+                              </span>
+                              {/* Effort badge */}
+                              {issue.effortLevel && EFFORT_CONFIG[issue.effortLevel] && (
+                                <span className="px-1.5 py-0.5 rounded-full text-[9px] font-semibold border hidden sm:inline-flex items-center gap-0.5"
+                                  style={{ background: EFFORT_CONFIG[issue.effortLevel].bg, color: EFFORT_CONFIG[issue.effortLevel].color, borderColor: EFFORT_CONFIG[issue.effortLevel].border }}>
+                                  <Clock className="w-2 h-2" />
+                                  {EFFORT_CONFIG[issue.effortLevel].label}
+                                </span>
+                              )}
                               {issue.filePath && (
                                 <span className="text-[10px] font-mono text-zinc-500 bg-white/5 px-1.5 py-0.5 rounded-md truncate max-w-[200px]">
                                   {issue.filePath}
@@ -1082,6 +1304,50 @@ export default function Report() {
                                     <pre className="code-block text-zinc-300 text-[11px]">{issue.codeSnippet}</pre>
                                   </div>
                                 )}
+
+                                {/* AI-Generated Code Fix */}
+                                <div className="border-t pt-3" style={{ borderColor: cfg.border }}>
+                                  {fixResults[actualIndex] ? (
+                                    <div className="space-y-2">
+                                      <div className="flex items-center gap-2">
+                                        <Wand2 className="w-3.5 h-3.5 text-violet-400" />
+                                        <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">AI-Generated Fix</p>
+                                        <span className="text-[9px] text-violet-400 bg-violet-500/8 border border-violet-500/15 px-1.5 py-0.5 rounded-md font-mono ml-auto">
+                                          {fixResults[actualIndex].language}
+                                        </span>
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(fixResults[actualIndex].fixCode); toast.success("Fix copied!"); }}
+                                          className="text-[11px] text-zinc-500 hover:text-zinc-300 flex items-center gap-1 transition-colors">
+                                          <Copy className="w-3 h-3" />Copy
+                                        </button>
+                                      </div>
+                                      <pre className="code-block text-emerald-300/90 text-[11px]">{fixResults[actualIndex].fixCode}</pre>
+                                      <div className="p-3 rounded-xl bg-violet-500/5 border border-violet-500/15 text-xs text-zinc-300 leading-relaxed">
+                                        <span className="text-violet-300 font-semibold">Why this works: </span>
+                                        {fixResults[actualIndex].explanation}
+                                      </div>
+                                      {fixResults[actualIndex].testSuggestion && (
+                                        <div className="flex items-start gap-1.5 text-xs text-zinc-400">
+                                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                                          <span>
+                                            <span className="text-emerald-400 font-medium">Verify: </span>
+                                            {fixResults[actualIndex].testSuggestion}
+                                          </span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <Button size="sm" variant="outline"
+                                      onClick={(e) => { e.stopPropagation(); generateFix(actualIndex); }}
+                                      disabled={fixLoading[actualIndex]}
+                                      className="border-violet-500/20 bg-violet-500/5 hover:bg-violet-500/10 text-violet-300 hover:text-violet-200 rounded-xl h-8 gap-1.5 text-xs">
+                                      {fixLoading[actualIndex]
+                                        ? <><Loader2 className="w-3 h-3 animate-spin" />Generating fix…</>
+                                        : <><Wand2 className="w-3 h-3" />Generate AI Fix</>
+                                      }
+                                    </Button>
+                                  )}
+                                </div>
                               </div>
                             </motion.div>
                           )}
