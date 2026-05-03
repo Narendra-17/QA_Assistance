@@ -2,11 +2,11 @@ import {
   useListQaRuns, useDeleteQaRun,
   getListQaRunsQueryKey, getGetQaStatsQueryKey, useGetQaStats,
 } from "@workspace/api-client-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { formatDistanceToNow } from "date-fns";
 import {
   Plus, Trash2, Globe, FileCode2, AlertTriangle, TrendingUp,
-  Activity, Loader2, Search, ShieldAlert, CheckCircle2,
+  Activity, Loader2, Search, ShieldAlert, CheckCircle2, RotateCcw,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip,
@@ -196,20 +196,68 @@ function SeverityBar({ issues }: { issues: Array<{ severity: string }> }) {
   );
 }
 
+// ── OWASP heatmap ─────────────────────────────────────────────────────────────
+const OWASP_NAMES: Record<string, string> = {
+  A01: "Broken Access Control",      A02: "Cryptographic Failures",
+  A03: "Injection",                  A04: "Insecure Design",
+  A05: "Security Misconfiguration",  A06: "Vulnerable Components",
+  A07: "Auth Failures",              A08: "Integrity Failures",
+  A09: "Logging Failures",           A10: "SSRF",
+};
+
+function OwaspHeatmap({ breakdown }: { breakdown: Array<{ code: string; count: number; critical: number }> }) {
+  if (breakdown.length === 0) return null;
+  const maxCount = Math.max(...breakdown.map(d => d.count), 1);
+
+  return (
+    <div className="space-y-2">
+      {breakdown.map(({ code, count, critical }) => {
+        const name      = OWASP_NAMES[code] ?? code;
+        const critRatio = critical / count;
+        const barColor  = critRatio >= 0.5 ? "#EF4444" : critRatio >= 0.2 ? "#F97316" : "#F59E0B";
+        const pct       = (count / maxCount) * 100;
+        return (
+          <div key={code} className="flex items-center gap-3 group">
+            <div className="w-[4.5rem] shrink-0 text-right">
+              <span className="text-[10px] font-mono font-semibold text-zinc-500 group-hover:text-zinc-300 transition-colors">{code}</span>
+            </div>
+            <div className="flex-1 flex items-center gap-2 min-w-0">
+              <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
+                <div className="bar-fill h-full rounded-full"
+                  style={{ width: `${pct}%`, background: barColor }} />
+              </div>
+              <span className="text-[11px] font-semibold tabular-nums w-5 text-right shrink-0" style={{ color: barColor }}>{count}</span>
+            </div>
+            <span className="text-[11px] text-zinc-500 w-40 shrink-0 truncate hidden lg:block">{name}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 type FilterType = "all" | "url" | "sast";
 
 export default function Dashboard() {
   const [filter,   setFilter]   = useState<FilterType>("all");
   const [search,   setSearch]   = useState("");
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [, setLocation] = useLocation();
 
-  const { data, isLoading }              = useListQaRuns();
-  const { data: stats, isLoading: statsLoading } = useGetQaStats();
+  const { data, isLoading, refetch }                           = useListQaRuns();
+  const { data: stats, isLoading: statsLoading, refetch: refetchStats } = useGetQaStats();
   const deleteMutation = useDeleteQaRun();
   const queryClient    = useQueryClient();
 
-  const allRuns     = data?.runs ?? [];
+  const allRuns      = data?.runs ?? [];
   const runningCount = allRuns.filter(r => r.status === "running" || r.status === "pending").length;
+
+  // Auto-refresh while scans are in progress
+  useEffect(() => {
+    if (runningCount === 0) return;
+    const t = setInterval(() => { void refetch(); void refetchStats(); }, 3000);
+    return () => clearInterval(t);
+  }, [runningCount, refetch, refetchStats]);
 
   const runs = useMemo(() => {
     let list = filter === "all" ? allRuns : allRuns.filter(r => r.runType === filter);
@@ -311,23 +359,45 @@ export default function Dashboard() {
           />
         </motion.div>
 
-        {/* Score Trend Chart */}
-        {!statsLoading && ((stats as { scoreHistory?: unknown[] } | undefined)?.scoreHistory?.length ?? 0) >= 2 && (
-          <motion.div variants={ITEM} initial="hidden" animate="show"
-            className="p-5 rounded-2xl border border-white/8"
-            style={{ background: "linear-gradient(145deg,hsl(230,22%,7%),hsl(230,22%,6%))" }}>
-            <div className="flex items-center gap-2 mb-4">
-              <TrendingUp className="w-4 h-4 text-violet-400" />
-              <p className="text-sm font-display font-semibold text-white">Security Score Trend</p>
-              <div className="ml-auto flex items-center gap-1.5">
-                {[0.6, 0.4, 0.2].map(o => (
-                  <span key={o} className="w-2 h-2 rounded-full bg-violet-500" style={{ opacity: o }} />
-                ))}
-              </div>
+        {/* Score Trend + OWASP breakdown side-by-side */}
+        {!statsLoading && (() => {
+          const history  = (stats as unknown as { scoreHistory?: ScorePoint[]; owaspBreakdown?: Array<{ code: string; count: number; critical: number }> } | undefined);
+          const hasChart = (history?.scoreHistory?.length ?? 0) >= 2;
+          const owasp    = history?.owaspBreakdown ?? [];
+          if (!hasChart && owasp.length === 0) return null;
+          return (
+            <div className={["grid gap-4", hasChart && owasp.length > 0 ? "lg:grid-cols-2" : "grid-cols-1"].join(" ")}>
+              {hasChart && (
+                <motion.div variants={ITEM} initial="hidden" animate="show"
+                  className="p-5 rounded-2xl border border-white/8"
+                  style={{ background: "linear-gradient(145deg,hsl(230,22%,7%),hsl(230,22%,6%))" }}>
+                  <div className="flex items-center gap-2 mb-4">
+                    <TrendingUp className="w-4 h-4 text-violet-400" />
+                    <p className="text-sm font-display font-semibold text-white">Security Score Trend</p>
+                    <div className="ml-auto flex items-center gap-1.5">
+                      {[0.6, 0.4, 0.2].map(o => (
+                        <span key={o} className="w-2 h-2 rounded-full bg-violet-500" style={{ opacity: o }} />
+                      ))}
+                    </div>
+                  </div>
+                  <ScoreTrendChart data={history!.scoreHistory!} />
+                </motion.div>
+              )}
+              {owasp.length > 0 && (
+                <motion.div variants={ITEM} initial="hidden" animate="show"
+                  className="p-5 rounded-2xl border border-white/8"
+                  style={{ background: "linear-gradient(145deg,hsl(230,22%,7%),hsl(230,22%,6%))" }}>
+                  <div className="flex items-center gap-2 mb-4">
+                    <ShieldAlert className="w-4 h-4 text-amber-400" />
+                    <p className="text-sm font-display font-semibold text-white">Top Vulnerability Categories</p>
+                    <span className="ml-auto text-[10px] text-zinc-600 font-mono">OWASP Top 10</span>
+                  </div>
+                  <OwaspHeatmap breakdown={owasp} />
+                </motion.div>
+              )}
             </div>
-            <ScoreTrendChart data={(stats as unknown as { scoreHistory: ScorePoint[] }).scoreHistory} />
-          </motion.div>
-        )}
+          );
+        })()}
 
         {/* Search + filter */}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.15 }}
@@ -482,6 +552,17 @@ export default function Dashboard() {
                                 <span className="text-xs text-zinc-500">{issueCount} issue{issueCount !== 1 ? "s" : ""}</span>
                               </>
                             )}
+                            {run.status === "completed" && (() => {
+                              const secs = Math.round((new Date(run.updatedAt).getTime() - new Date(run.createdAt).getTime()) / 1000);
+                              if (secs < 1) return null;
+                              const dur = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+                              return (
+                                <>
+                                  <span className="text-zinc-700">·</span>
+                                  <span className="text-xs text-zinc-600">{dur}</span>
+                                </>
+                              );
+                            })()}
                           </div>
                         </div>
 
@@ -504,6 +585,23 @@ export default function Dashboard() {
                               ? <CheckCircle2 className="w-4 h-4 text-emerald-500" />
                               : <AlertTriangle className={`w-4 h-4 ${score >= 60 ? "text-amber-500" : "text-red-500"}`} />}
                           </div>
+                        )}
+
+                        {/* Re-scan (URL runs only) */}
+                        {run.runType === "url" && run.appUrl && (
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault(); e.stopPropagation();
+                              const params = new URLSearchParams();
+                              params.set("url", run.appUrl!);
+                              if (run.appDescription) params.set("desc", run.appDescription);
+                              setLocation(`/new?${params.toString()}`);
+                            }}
+                            className="w-7 h-7 rounded-lg flex items-center justify-center text-zinc-600 hover:text-violet-400 hover:bg-violet-500/10 transition-all shrink-0 opacity-0 group-hover:opacity-100"
+                            title="Re-scan this URL"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                          </button>
                         )}
 
                         {/* Delete */}

@@ -6,7 +6,7 @@ import {
   Copy, Download, Globe, FileCode2, Loader2, XCircle,
   TrendingUp, BarChart3, RotateCcw, ChevronDown, ChevronUp,
   Share2, FileText, Shield, Clock, Check, Eye, X, Zap,
-  Wand2, Target, Swords, Layers, Search, Bell, History,
+  Wand2, Target, Swords, Layers, Search, Bell, History, ListFilter, ArrowUpDown,
 } from "lucide-react";
 import { PieChart, Pie, Cell, Tooltip as RechartTooltip, ResponsiveContainer } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -149,7 +149,11 @@ interface AugmentedReport extends Report {
   attackChain?: string | null;
 }
 
-function IntelligencePanel({ report, issues }: { report: AugmentedReport; issues: Issue[] }) {
+function IntelligencePanel({ report, issues, activeOwasp, onOwaspFilter }: {
+  report: AugmentedReport; issues: Issue[];
+  activeOwasp: string | null;
+  onOwaspFilter: (code: string | null) => void;
+}) {
   const [open, setOpen] = useState(true);
 
   const owaspCounts: Record<string, { count: number; critical: number }> = {};
@@ -219,10 +223,17 @@ function IntelligencePanel({ report, issues }: { report: AugmentedReport; issues
                     {OWASP_CATS.map((cat) => {
                       const cnt = owaspCounts[cat.id]?.count ?? 0;
                       const hasCrit = (owaspCounts[cat.id]?.critical ?? 0) > 0;
+                      const isActive = activeOwasp === cat.id;
                       return (
-                        <div key={cat.id} className="p-2 rounded-xl border text-center transition-all"
+                        <button key={cat.id}
+                          onClick={() => cnt > 0 && onOwaspFilter(cat.id)}
+                          disabled={cnt === 0}
+                          className={[
+                            "p-2 rounded-xl border text-center transition-all w-full",
+                            cnt > 0 ? "cursor-pointer hover:scale-[1.03] active:scale-95" : "cursor-default",
+                          ].join(" ")}
                           style={cnt > 0
-                            ? { background: `${cat.color}0D`, borderColor: `${cat.color}2A` }
+                            ? { background: `${cat.color}${isActive ? "22" : "0D"}`, borderColor: `${cat.color}${isActive ? "60" : "2A"}`, boxShadow: isActive ? `0 0 0 2px ${cat.color}40` : undefined }
                             : { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.05)" }
                           }>
                           <div className="text-[9px] font-bold font-mono mb-1"
@@ -234,11 +245,20 @@ function IntelligencePanel({ report, issues }: { report: AugmentedReport; issues
                               </div>
                             : <CheckCircle2 className="w-2.5 h-2.5 text-emerald-500/35 mx-auto" />
                           }
-                        </div>
+                        </button>
                       );
                     })}
                   </div>
-                  <p className="text-[9px] text-zinc-600 mt-2">● = contains critical/high issues</p>
+                  <div className="flex items-center gap-2 mt-2">
+                    <p className="text-[9px] text-zinc-600">● = contains critical/high · Click a cell to filter issues below</p>
+                    {activeOwasp && (
+                      <button onClick={() => onOwaspFilter(null)}
+                        className="ml-auto flex items-center gap-1 text-[10px] text-cyan-400 hover:text-cyan-200 bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5 rounded-lg transition-colors">
+                        <X className="w-2.5 h-2.5" />
+                        Clear {activeOwasp} filter
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Category donut */}
@@ -393,15 +413,29 @@ function SeverityBar({ issues }: { issues: Issue[] }) {
   );
 }
 
-function ProgressAnalysis({ isUrl }: { isUrl: boolean }) {
+function ProgressAnalysis({ isUrl, startedAt }: { isUrl: boolean; startedAt?: string }) {
   const steps = isUrl
     ? ["Fetching URL", "Parsing HTML", "Checking headers", "AI analysis", "Generating report"]
     : ["Reading files", "Detecting secrets", "Scanning dependencies", "AI analysis", "Generating report"];
-  const [step, setStep] = useState(0);
+  const [step, setStep]       = useState(0);
+  const [elapsed, setElapsed] = useState(0);
+
   useEffect(() => {
     const interval = setInterval(() => setStep(s => (s + 1) % steps.length), 2800);
     return () => clearInterval(interval);
   }, [steps.length]);
+
+  useEffect(() => {
+    const base = startedAt ? Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000) : 0;
+    setElapsed(base);
+    const t = setInterval(() => setElapsed(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [startedAt]);
+
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  const elapsedStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+
   return (
     <div className="text-center py-20 rounded-2xl border border-violet-500/12 bg-violet-500/4">
       <div className="relative inline-flex mb-6">
@@ -420,11 +454,15 @@ function ProgressAnalysis({ isUrl }: { isUrl: boolean }) {
           </motion.p>
         </AnimatePresence>
       </div>
-      <div className="flex justify-center gap-1.5 mb-6">
+      <div className="flex justify-center gap-1.5 mb-4">
         {steps.map((_, i) => (
           <div key={i} className="h-1 rounded-full transition-all duration-500"
             style={{ width: i === step ? 24 : 8, background: i <= step ? "#8B5CF6" : "rgba(255,255,255,0.1)" }} />
         ))}
+      </div>
+      <div className="flex items-center justify-center gap-2 mb-1">
+        <span className="font-mono text-violet-400 text-sm font-semibold tabular-nums">{elapsedStr}</span>
+        <span className="text-zinc-600 text-xs">elapsed</span>
       </div>
       <p className="text-zinc-600 text-xs">This typically takes 20–40 seconds</p>
     </div>
@@ -839,10 +877,14 @@ export default function Report() {
   const [filterSev, setFilterSev] = useState<"all" | SevKey>("all");
   const [issueSearch, setIssueSearch] = useState("");
   const [expandedIssue, setExpandedIssue] = useState<number | null>(null);
+  const issueSearchRef = useRef<HTMLInputElement>(null);
   const [showShareModal, setShowShareModal] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [fixLoading, setFixLoading] = useState<Record<number, boolean>>({});
   const [fixResults, setFixResults] = useState<Record<number, { fixCode: string; explanation: string; language: string; testSuggestion: string }>>({});
+  const [filterOwasp, setFilterOwasp] = useState<string | null>(null);
+  const [filterStatus, setFilterStatus] = useState<"all" | IssueStatus["status"]>("all");
+  const [sortBy, setSortBy] = useState<"severity" | "effort" | "owasp">("severity");
   const queryClient = useQueryClient();
   const prevStatusRef = useRef<string | undefined>(undefined);
 
@@ -880,6 +922,46 @@ export default function Report() {
     ) {
       Notification.requestPermission();
     }
+  }, [run?.status]);
+
+  // Keep a ref of issues length so the keydown handler can clamp without stale closure
+  const issuesLengthRef = useRef(0);
+
+  // Auto-scroll when keyboard navigation moves to a new issue
+  useEffect(() => {
+    if (expandedIssue === null) return;
+    const el = document.querySelector<HTMLElement>(`[data-issue-idx="${expandedIssue}"]`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [expandedIssue]);
+
+  // Keyboard shortcuts: j/k navigate issues, / focus search, Escape collapse
+  useEffect(() => {
+    if (run?.status !== "completed") return;
+    function handleKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.key === "j" || e.key === "ArrowDown") {
+        e.preventDefault();
+        setExpandedIssue(prev => {
+          const len = issuesLengthRef.current;
+          if (len === 0) return null;
+          return Math.min(prev === null ? 0 : prev + 1, len - 1);
+        });
+      } else if (e.key === "k" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setExpandedIssue(prev => {
+          if (prev === null || prev === 0) return 0;
+          return prev - 1;
+        });
+      } else if (e.key === "Escape") {
+        setExpandedIssue(null);
+      } else if (e.key === "/") {
+        e.preventDefault();
+        issueSearchRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
   }, [run?.status]);
 
   // Stats for same-target run history
@@ -941,13 +1023,47 @@ export default function Report() {
 
   const report = run?.report as Report | null | undefined;
   const allIssues = report?.issues ?? [];
-  const issues = (filterSev === "all" ? allIssues : allIssues.filter(i => i.severity === filterSev))
-    .filter(i => {
-      if (!issueSearch.trim()) return true;
+
+  const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+  const EFFORT_ORDER: Record<string, number> = { low: 0, medium: 1, high: 2 };
+
+  const issues = useMemo(() => {
+    let list: Issue[] = filterSev === "all" ? allIssues : allIssues.filter(i => i.severity === filterSev);
+
+    if (filterOwasp) list = list.filter(i => getIssueOwaspCode(i) === filterOwasp);
+
+    if (filterStatus !== "all") {
+      list = list.filter(i => (issueStatusMap[allIssues.indexOf(i)] ?? "open") === filterStatus);
+    }
+
+    if (issueSearch.trim()) {
       const q = issueSearch.toLowerCase();
-      return [i.title, i.description, i.possibleCause, i.filePath ?? "", i.owasp ?? ""]
-        .some(t => t.toLowerCase().includes(q));
+      list = list.filter(i =>
+        [i.title, i.description, i.possibleCause, i.filePath ?? "", i.owasp ?? ""]
+          .some(t => t.toLowerCase().includes(q)),
+      );
+    }
+
+    return [...list].sort((a, b) => {
+      if (sortBy === "effort") {
+        return (EFFORT_ORDER[a.effortLevel ?? ""] ?? 3) - (EFFORT_ORDER[b.effortLevel ?? ""] ?? 3);
+      }
+      if (sortBy === "owasp") return getIssueOwaspCode(a).localeCompare(getIssueOwaspCode(b));
+      return (SEV_ORDER[a.severity] ?? 4) - (SEV_ORDER[b.severity] ?? 4);
     });
+  }, [allIssues, filterSev, filterOwasp, filterStatus, issueSearch, issueStatusMap, sortBy]);
+
+  // Sync ref synchronously so keyboard handler always has the current count
+  issuesLengthRef.current = issues.length;
+
+  const issueSummary = useMemo(() => {
+    const byStatus = { open: 0, acknowledged: 0, resolved: 0, wont_fix: 0 };
+    allIssues.forEach((_, i) => {
+      const s = issueStatusMap[i] ?? "open";
+      if (s in byStatus) byStatus[s as keyof typeof byStatus]++;
+    });
+    return byStatus;
+  }, [allIssues, issueStatusMap]);
 
   const copyReport = useCallback(() => {
     if (!report) return;
@@ -975,6 +1091,35 @@ export default function Report() {
     URL.revokeObjectURL(a.href);
     toast.success("JSON exported");
   }, [report, run]);
+
+  const downloadCsv = useCallback(() => {
+    if (!run || issues.length === 0) return;
+    const header = ["#", "Severity", "Title", "OWASP", "Effort", "Status", "File", "Line", "Description"];
+    const rows = issues.map((iss, i) => {
+      const origIdx = allIssues.indexOf(iss);
+      const status  = issueStatusMap[origIdx] ?? "open";
+      return [
+        String(i + 1),
+        iss.severity,
+        `"${iss.title.replace(/"/g, '""')}"`,
+        getIssueOwaspCode(iss),
+        iss.effortLevel ?? "",
+        status,
+        iss.filePath  ? `"${iss.filePath.replace(/"/g, '""')}"` : "",
+        String(iss.lineNumber ?? ""),
+        `"${iss.description.replace(/"/g, '""')}"`,
+      ].join(",");
+    });
+    const csv  = [header.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const a    = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    const slug = (run.appUrl ?? run.projectName ?? run.id).replace(/[^a-z0-9]/gi, "-").slice(0, 40);
+    a.download = `qa-issues-${slug}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast.success(`${issues.length} issue${issues.length !== 1 ? "s" : ""} exported as CSV`);
+  }, [run, issues, allIssues, issueStatusMap]);
 
   const downloadMarkdown = useCallback(() => {
     if (!report || !run) return;
@@ -1230,7 +1375,7 @@ export default function Report() {
         <AnimatePresence>
           {isRunning && (
             <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}>
-              <ProgressAnalysis isUrl={isUrl} />
+              <ProgressAnalysis isUrl={isUrl} startedAt={run?.createdAt} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -1258,6 +1403,18 @@ export default function Report() {
             <div className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-4">
               <div className="flex flex-col items-center justify-center p-6 rounded-2xl border border-white/7 bg-white/2">
                 <ScoreGauge score={report.overallScore} />
+                {sameTargetHistory.length > 0 && (() => {
+                  const prev  = sameTargetHistory[sameTargetHistory.length - 1].score;
+                  const delta = report.overallScore - prev;
+                  if (delta === 0) return null;
+                  return (
+                    <div className={["mt-2 px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1",
+                      delta > 0 ? "text-emerald-400 bg-emerald-500/10 border border-emerald-500/20" : "text-red-400 bg-red-500/10 border border-red-500/20",
+                    ].join(" ")}>
+                      {delta > 0 ? "↑" : "↓"} {Math.abs(delta)} pts vs last run
+                    </div>
+                  );
+                })()}
               </div>
               <div className="flex flex-col gap-4 p-6 rounded-2xl border border-white/7 bg-white/2">
                 <div>
@@ -1357,18 +1514,63 @@ export default function Report() {
             )}
 
             {/* Intelligence Panel */}
-            <IntelligencePanel report={report as AugmentedReport} issues={allIssues} />
+            <IntelligencePanel
+              report={report as AugmentedReport}
+              issues={allIssues}
+              activeOwasp={filterOwasp}
+              onOwaspFilter={(code) => {
+                setFilterOwasp(prev => prev === code ? null : code);
+                setExpandedIssue(null);
+              }}
+            />
 
-            {/* Filter row */}
-            <div className="space-y-2">
+            {/* Filter / triage row */}
+            <div className="space-y-2.5">
+
+              {/* Remediation progress bar + sort */}
+              {allIssues.length > 0 && (
+                <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border border-white/7 bg-white/2 flex-wrap">
+                  <ListFilter className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                  <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                    <button onClick={() => { setFilterStatus("all"); setExpandedIssue(null); }}
+                      className={["font-medium transition-colors", filterStatus === "all" ? "text-white" : "text-zinc-500 hover:text-zinc-300"].join(" ")}>
+                      {allIssues.length} total
+                    </button>
+                    {([
+                      { key: "open"         as const, label: "open",         color: "text-zinc-400"    },
+                      { key: "acknowledged" as const, label: "acknowledged", color: "text-yellow-400"  },
+                      { key: "resolved"     as const, label: "resolved",     color: "text-emerald-400" },
+                      { key: "wont_fix"     as const, label: "won't fix",    color: "text-zinc-500"    },
+                    ] as const).map(({ key, label, color }) => issueSummary[key] > 0 && (
+                      <button key={key} onClick={() => { setFilterStatus(prev => prev === key ? "all" : key); setExpandedIssue(null); }}
+                        className={["font-medium transition-colors pb-px border-b", filterStatus === key ? `${color} border-current` : `${color} opacity-70 border-transparent hover:opacity-100 hover:border-current`].join(" ")}>
+                        {issueSummary[key]} {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="ml-auto flex items-center gap-1.5 shrink-0">
+                    <ArrowUpDown className="w-3 h-3 text-zinc-600 shrink-0" />
+                    {(["severity", "effort", "owasp"] as const).map(s => (
+                      <button key={s} onClick={() => setSortBy(s)}
+                        className={["px-2 py-0.5 rounded-md text-[10px] font-semibold transition-all capitalize",
+                          sortBy === s ? "bg-violet-600/30 text-violet-300 border border-violet-500/30" : "text-zinc-600 hover:text-zinc-400 border border-transparent",
+                        ].join(" ")}>
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Severity + active OWASP filter chips */}
               <div className="flex items-center gap-2 flex-wrap">
                 <BarChart3 className="w-3.5 h-3.5 text-zinc-500" />
-                <span className="text-xs text-zinc-500 font-medium">Filter by severity:</span>
+                <span className="text-xs text-zinc-500 font-medium">Severity:</span>
                 {(["all", "critical", "high", "medium", "low"] as const).map((s) => {
                   const cfg = s === "all" ? null : SEV_CONFIG[s];
                   const count = s === "all" ? allIssues.length : allIssues.filter(i => i.severity === s).length;
                   return (
-                    <button key={s} onClick={() => setFilterSev(s)}
+                    <button key={s} onClick={() => { setFilterSev(s); setExpandedIssue(null); }}
                       className={["px-2.5 py-1 rounded-full text-[11px] font-semibold transition-all border",
                         filterSev === s && s === "all" ? "bg-violet-600 text-white border-violet-600" : "",
                         filterSev !== s ? "bg-white/4 text-zinc-400 border-white/8 hover:border-white/16 hover:text-zinc-200" : "",
@@ -1378,19 +1580,38 @@ export default function Report() {
                     </button>
                   );
                 })}
-                <div className="ml-auto flex items-center gap-1.5 text-[11px] text-zinc-500">
-                  <Shield className="w-3 h-3" />
-                  <span className="hidden sm:block">Click an issue to expand · Mark status to track remediation</span>
+                {filterOwasp && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border bg-cyan-500/10 text-cyan-300 border-cyan-500/25">
+                    <Target className="w-2.5 h-2.5" />{filterOwasp}
+                    <button onClick={() => { setFilterOwasp(null); setExpandedIssue(null); }} className="ml-0.5 hover:text-white transition-colors" aria-label="Clear OWASP filter">
+                      <X className="w-2.5 h-2.5" />
+                    </button>
+                  </span>
+                )}
+                <div className="ml-auto flex items-center gap-2 shrink-0">
+                  {issues.length > 0 && (
+                    <button
+                      onClick={downloadCsv}
+                      title={`Export ${issues.length} filtered issue${issues.length !== 1 ? "s" : ""} as CSV`}
+                      className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold text-zinc-500 hover:text-emerald-300 hover:bg-emerald-500/8 border border-transparent hover:border-emerald-500/20 transition-all">
+                      <Download className="w-2.5 h-2.5" />CSV
+                    </button>
+                  )}
+                  <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-zinc-500">
+                    <Shield className="w-3 h-3" />Click to expand
+                  </span>
                 </div>
               </div>
+
               {/* Issue search */}
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500 pointer-events-none" />
                 <input
+                  ref={issueSearchRef}
                   type="text"
                   value={issueSearch}
                   onChange={e => { setIssueSearch(e.target.value); setExpandedIssue(null); }}
-                  placeholder="Search issues by title, description, file path, or OWASP category…"
+                  placeholder="Search issues…  (press / to focus, j/k to navigate)"
                   className="w-full pl-9 pr-9 py-2 rounded-xl bg-white/4 border border-white/8 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:border-violet-500/40 focus:bg-white/6 transition-all"
                 />
                 {issueSearch && (
@@ -1400,9 +1621,11 @@ export default function Report() {
                   </button>
                 )}
               </div>
-              {issueSearch && (
+              {(issueSearch || filterOwasp || filterStatus !== "all") && (
                 <p className="text-[11px] text-zinc-500">
-                  {issues.length === 0 ? "No issues match your search." : `Showing ${issues.length} of ${allIssues.length} issue${allIssues.length !== 1 ? "s" : ""}`}
+                  {issues.length === 0
+                    ? "No issues match your filters."
+                    : `Showing ${issues.length} of ${allIssues.length} issue${allIssues.length !== 1 ? "s" : ""}`}
                 </p>
               )}
             </div>
@@ -1413,10 +1636,10 @@ export default function Report() {
                 <div className="text-center py-12 rounded-2xl border border-white/7 bg-white/2">
                   <CheckCircle2 className="w-9 h-9 text-emerald-400 mx-auto mb-3" />
                   <h3 className="font-semibold text-white text-sm mb-1">
-                    {filterSev === "all" ? "No issues found!" : `No ${filterSev} issues`}
+                    {filterSev === "all" && !filterOwasp && filterStatus === "all" ? "No issues found!" : "No matching issues"}
                   </h3>
                   <p className="text-zinc-500 text-xs">
-                    {filterSev === "all" ? "Clean analysis — no issues detected." : "No issues at this severity level."}
+                    {filterSev === "all" && !filterOwasp && filterStatus === "all" ? "Clean analysis — no issues detected." : "Try adjusting your filters."}
                   </p>
                 </div>
               ) : (
@@ -1431,7 +1654,8 @@ export default function Report() {
                     const isResolved = issueStatus === "resolved" || issueStatus === "wont_fix";
 
                     return (
-                      <motion.div key={`${filterSev}-${displayIdx}`}
+                      <motion.div key={`${filterSev}-${filterOwasp ?? ""}-${filterStatus}-${displayIdx}`}
+                        data-issue-idx={displayIdx}
                         initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: displayIdx * 0.03 }}
                         className={["rounded-2xl border overflow-hidden transition-opacity", isResolved ? "opacity-50" : ""].join(" ")}

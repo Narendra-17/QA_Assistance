@@ -1,10 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Key, Plus, Trash2, Copy, Eye, EyeOff, Check, Loader2,
   Github, Terminal, AlertTriangle, Clock, Shield, Zap, ChevronDown, ChevronUp,
-  ExternalLink, Info,
+  Info, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -221,7 +221,7 @@ function NewKeyBanner({ apiKey, onDismiss }: { apiKey: NewKey; onDismiss: () => 
           </p>
         </div>
         <button onClick={onDismiss} className="text-zinc-500 hover:text-zinc-300 transition-colors p-1">
-          <Check className="w-4 h-4" />
+          <X className="w-4 h-4" />
         </button>
       </div>
       <div className="flex gap-2">

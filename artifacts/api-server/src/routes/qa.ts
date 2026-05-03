@@ -343,17 +343,33 @@ router.get("/runs", async (req: Request, res: Response) => {
   }
   const userId = (req.user as { id: string }).id;
   try {
-    const runs = await db
+    const rawRuns = await db
       .select({
         id: qaRunsTable.id, userId: qaRunsTable.userId, runType: qaRunsTable.runType,
         appUrl: qaRunsTable.appUrl, appDescription: qaRunsTable.appDescription,
         projectName: qaRunsTable.projectName, status: qaRunsTable.status,
         errorMessage: qaRunsTable.errorMessage, createdAt: qaRunsTable.createdAt,
-        updatedAt: qaRunsTable.updatedAt,
+        updatedAt: qaRunsTable.updatedAt, report: qaRunsTable.report,
       })
       .from(qaRunsTable)
       .where(eq(qaRunsTable.userId, userId))
       .orderBy(desc(qaRunsTable.createdAt));
+
+    // Return only a minimal report summary so the dashboard can show scores/severity bars
+    // without sending full issue descriptions across the wire.
+    const runs = rawRuns.map(r => {
+      const rep = r.report as { overallScore?: number; issues?: Array<{ severity: string }> } | null;
+      const { report: _rep, ...rest } = r;
+      return {
+        ...rest,
+        report: rep
+          ? {
+              overallScore: rep.overallScore ?? 0,
+              issues: (rep.issues ?? []).map((i: { severity: string; owasp?: string | null }) => ({ severity: i.severity, owasp: i.owasp ?? null })),
+            }
+          : null,
+      };
+    });
     res.json({ runs });
   } catch {
     res.status(500).json({ error: "Failed to fetch runs" });
@@ -405,6 +421,26 @@ router.get("/stats", async (req: Request, res: Response) => {
       };
     });
 
+    // OWASP breakdown across all completed runs
+    const owaspMap: Record<string, { count: number; critical: number }> = {};
+    for (const r of completed) {
+      const rep = r.report as Record<string, unknown> | null;
+      if (rep) {
+        for (const issue of ((rep.issues ?? []) as Array<{ owasp?: string | null; severity: string }>)) {
+          const code = issue.owasp?.match(/^(A\d{2})/)?.[1];
+          if (code) {
+            if (!owaspMap[code]) owaspMap[code] = { count: 0, critical: 0 };
+            owaspMap[code].count++;
+            if (issue.severity === "critical" || issue.severity === "high") owaspMap[code].critical++;
+          }
+        }
+      }
+    }
+    const owaspBreakdown = Object.entries(owaspMap)
+      .map(([code, { count, critical }]) => ({ code, count, critical }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+
     res.json({
       totalRuns: runs.length,
       completedRuns: completed.length,
@@ -414,6 +450,7 @@ router.get("/stats", async (req: Request, res: Response) => {
       urlRuns: runs.filter(r => r.runType === "url").length,
       sastRuns: runs.filter(r => r.runType === "sast").length,
       scoreHistory,
+      owaspBreakdown,
     });
   } catch {
     res.status(500).json({ error: "Failed to fetch stats" });

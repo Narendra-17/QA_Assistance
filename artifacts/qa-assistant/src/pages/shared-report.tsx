@@ -4,11 +4,11 @@ import { formatDistanceToNow, format } from "date-fns";
 import {
   AlertTriangle, ShieldAlert, Info, Bug, CheckCircle2,
   Globe, FileCode2, Loader2, XCircle, TrendingUp, BarChart3,
-  Clock, ShieldCheck, ChevronDown, ChevronUp, Copy,
+  Clock, ShieldCheck, ChevronDown, ChevronUp, Copy, Target,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { StatusBadge } from "@/components/status-badge";
 import { getBaseUrl } from "@/lib/api";
@@ -21,6 +21,10 @@ interface Issue {
   suggestedFix: string;
   codeSnippet?: string | null;
   filePath?: string | null;
+  lineNumber?: number | null;
+  detectionMethod?: "deterministic" | "sca-osv" | "ai";
+  owasp?: string | null;
+  effortLevel?: "low" | "medium" | "high" | null;
 }
 
 interface Report {
@@ -40,18 +44,60 @@ const SEV_CONFIG = {
 } as const;
 type SevKey = keyof typeof SEV_CONFIG;
 
+const EFFORT_CONFIG: Record<string, { label: string; color: string; bg: string; border: string }> = {
+  low:    { label: "< 2h", color: "#10B981", bg: "rgba(16,185,129,0.09)",  border: "rgba(16,185,129,0.22)"  },
+  medium: { label: "~1d",  color: "#F59E0B", bg: "rgba(245,158,11,0.09)",  border: "rgba(245,158,11,0.22)"  },
+  high:   { label: "Days", color: "#F97316", bg: "rgba(249,115,22,0.09)",  border: "rgba(249,115,22,0.22)"  },
+};
+
+function guessOwasp(issue: Issue): string {
+  const txt = `${issue.title} ${issue.description} ${issue.possibleCause ?? ""}`.toLowerCase();
+  if (/sql|xss|inject|template injection|code injection|command inject/.test(txt)) return "A03";
+  if (/auth|login|session|jwt|password|credential|privilege|idor|access control|broken access/.test(txt)) return "A01";
+  if (/crypto|tls|ssl|encrypt|hash|weak cipher|plaintext password|insecure hash/.test(txt)) return "A02";
+  if (/secret|hardcoded|api.key|token in code|entropy/.test(txt)) return "A02";
+  if (/cors|header|csp|debug|misconfigur|default credential|stack trace/.test(txt)) return "A05";
+  if (/dependency|cve|vulnerable component|outdated package|known vuln/.test(txt)) return "A06";
+  if (/deserialization|integrity|supply chain|unsigned/.test(txt)) return "A08";
+  if (/log|monitor|audit trail|no alerting/.test(txt)) return "A09";
+  if (/ssrf|server.side request/.test(txt)) return "A10";
+  if (/rate limit|brute force|account lockout|multi.factor/.test(txt)) return "A07";
+  return "A04";
+}
+
+function getIssueOwaspCode(issue: Issue): string {
+  if (issue.owasp) { const m = issue.owasp.match(/^(A\d{2})/); if (m) return m[1]; }
+  return guessOwasp(issue);
+}
+
 function ScoreGauge({ score }: { score: number }) {
   const color = score >= 80 ? "#10B981" : score >= 60 ? "#F59E0B" : score >= 40 ? "#F97316" : "#EF4444";
   const grade = score >= 90 ? "A+" : score >= 80 ? "A" : score >= 70 ? "B" : score >= 60 ? "C" : score >= 40 ? "D" : "F";
   const r = 52; const circ = 2 * Math.PI * r;
-  const dash = (score / 100) * circ;
+  const targetDash = (score / 100) * circ;
+  const circleRef = useRef<SVGCircleElement>(null);
+  const animated = useRef(false);
+
+  useEffect(() => {
+    if (animated.current || !circleRef.current) return;
+    animated.current = true;
+    const el = circleRef.current;
+    el.style.strokeDasharray = `0 ${circ}`;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        el.style.transition = "stroke-dasharray 1.1s cubic-bezier(0.4,0,0.2,1)";
+        el.style.strokeDasharray = `${targetDash} ${circ}`;
+      });
+    });
+  }, [circ, targetDash]);
+
   return (
     <div className="flex flex-col items-center gap-3">
       <div className="relative w-36 h-36">
         <svg className="w-full h-full -rotate-90" viewBox="0 0 120 120">
           <circle cx="60" cy="60" r={r} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="9" />
-          <circle cx="60" cy="60" r={r} fill="none" stroke={color} strokeWidth="9"
-            strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
+          <circle ref={circleRef} cx="60" cy="60" r={r} fill="none" stroke={color} strokeWidth="9"
+            strokeDasharray={`0 ${circ}`} strokeLinecap="round"
             style={{ filter: `drop-shadow(0 0 10px ${color}70)` }} />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-0.5">
@@ -167,7 +213,7 @@ export default function SharedReport() {
               "w-9 h-9 rounded-xl flex items-center justify-center shrink-0",
               isUrl ? "bg-violet-500/14 border border-violet-500/22" : "bg-cyan-500/14 border border-cyan-500/22",
             ].join(" ")}>
-              {isUrl ? <Globe className="w-4.5 h-4.5 text-violet-400" /> : <FileCode2 className="w-4.5 h-4.5 text-cyan-400" />}
+              {isUrl ? <Globe className="w-4 h-4 text-violet-400" /> : <FileCode2 className="w-4 h-4 text-cyan-400" />}
             </div>
             <div>
               <h1 className="text-xl font-display font-bold text-white leading-tight">
@@ -285,9 +331,30 @@ export default function SharedReport() {
                             style={{ background: `${cfg.color}18`, color: cfg.color, borderColor: cfg.border }}>
                             {cfg.label}
                           </span>
+                          {issue.detectionMethod === "deterministic" && (
+                            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold border border-red-500/30 bg-red-500/10 text-red-400">
+                              Secrets Scan
+                            </span>
+                          )}
+                          {issue.detectionMethod === "sca-osv" && (
+                            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold border border-orange-500/30 bg-orange-500/10 text-orange-400">
+                              CVE/OSV
+                            </span>
+                          )}
+                          <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold border font-mono hidden sm:inline-block"
+                            style={{ background: "rgba(6,182,212,0.08)", color: "#06B6D4", borderColor: "rgba(6,182,212,0.2)" }}>
+                            {getIssueOwaspCode(issue)}
+                          </span>
+                          {issue.effortLevel && EFFORT_CONFIG[issue.effortLevel] && (
+                            <span className="px-1.5 py-0.5 rounded-full text-[9px] font-semibold border hidden sm:inline-flex items-center gap-0.5"
+                              style={{ background: EFFORT_CONFIG[issue.effortLevel].bg, color: EFFORT_CONFIG[issue.effortLevel].color, borderColor: EFFORT_CONFIG[issue.effortLevel].border }}>
+                              <Clock className="w-2 h-2" />
+                              {EFFORT_CONFIG[issue.effortLevel].label}
+                            </span>
+                          )}
                           {issue.filePath && (
                             <span className="text-[10px] font-mono text-zinc-500 bg-white/5 px-1.5 py-0.5 rounded-md truncate max-w-[200px]">
-                              {issue.filePath}
+                              {issue.filePath}{issue.lineNumber ? `:${issue.lineNumber}` : ""}
                             </span>
                           )}
                         </div>

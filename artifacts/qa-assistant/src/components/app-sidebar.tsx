@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, ShieldCheck, FileCode2, Globe, LogOut,
@@ -34,8 +35,15 @@ function RunStatusIcon({ status }: { status: string }) {
 export function AppSidebar() {
   const { user, logout }   = useAuth();
   const [location]         = useLocation();
-  const { data: runsData } = useListQaRuns();
-  const recentRuns         = runsData?.runs?.slice(0, 4) ?? [];
+  const { data: runsData, refetch } = useListQaRuns();
+  const recentRuns   = runsData?.runs?.slice(0, 4) ?? [];
+  const runningCount = (runsData?.runs ?? []).filter(r => r.status === "running" || r.status === "pending").length;
+
+  useEffect(() => {
+    if (runningCount === 0) return;
+    const t = setInterval(() => void refetch(), 3000);
+    return () => clearInterval(t);
+  }, [runningCount, refetch]);
 
   const initials     = [user?.firstName, user?.lastName].filter(Boolean).map(s => s![0]).join("").toUpperCase() || "U";
   const displayName  = [user?.firstName, user?.lastName].filter(Boolean).join(" ") || "Developer";
