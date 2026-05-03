@@ -14,6 +14,8 @@ import { BackToTop } from "@/components/back-to-top";
 
 const NotFound     = lazy(() => import("@/pages/not-found"));
 const Landing      = lazy(() => import("@/pages/landing"));
+const Login        = lazy(() => import("@/pages/login"));
+const Register     = lazy(() => import("@/pages/register"));
 const Dashboard    = lazy(() => import("@/pages/dashboard"));
 const NewRun       = lazy(() => import("@/pages/new-run"));
 const Report       = lazy(() => import("@/pages/report"));
@@ -159,7 +161,9 @@ function ProtectedRouter() {
       <Suspense fallback={<PageLoader />}>
         <Switch>
           <Route path="/share/:token" component={SharedReport} />
-          <Route component={Landing} />
+          <Route path="/login"        component={Login}        />
+          <Route path="/register"     component={Register}     />
+          <Route                      component={Landing}      />
         </Switch>
       </Suspense>
     );

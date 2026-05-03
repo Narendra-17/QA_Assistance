@@ -11,6 +11,13 @@ interface AuthState {
   logout: () => void;
 }
 
+function getAppBase(): string {
+  const baseHref = document.querySelector("base")?.getAttribute("href");
+  if (baseHref) return baseHref.replace(/\/+$/, "");
+  const parts = window.location.pathname.split("/");
+  return parts.length >= 2 ? `/${parts[1]}` : "";
+}
+
 export function useAuth(): AuthState {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -42,13 +49,17 @@ export function useAuth(): AuthState {
   }, []);
 
   const login = useCallback(() => {
-    const pathBase = window.location.pathname.split("/").slice(0, 2).join("/");
-    const base = (document.querySelector("base")?.getAttribute("href") ?? (pathBase || "/")).replace(/\/+$/, "") || "/";
-    window.location.href = `/api/login?returnTo=${encodeURIComponent(base)}`;
+    const base = getAppBase();
+    window.location.href = `${base}/login`;
   }, []);
 
   const logout = useCallback(() => {
-    window.location.href = "/api/logout";
+    fetch("/api/auth/logout", { method: "POST", credentials: "include" })
+      .catch(() => {})
+      .finally(() => {
+        const base = getAppBase();
+        window.location.href = `${base}/login`;
+      });
   }, []);
 
   return {

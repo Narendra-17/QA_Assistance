@@ -130,6 +130,20 @@ const analysisLimiter = rateLimit({
 
 app.use(globalLimiter);
 
+// ── Auth endpoint rate limiting — protect register/login from brute-force ─────
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req: Request, res: Response) => {
+    logSecurityEvent("RATE_LIMITED", req, "auth limiter");
+    res.status(429).json({ error: "Too many attempts. Please wait 15 minutes." });
+  },
+});
+app.post("/api/auth/register", authLimiter);
+app.post("/api/auth/login", authLimiter);
+
 // ── Authentication ────────────────────────────────────────────────────────────
 app.use(authMiddleware);
 

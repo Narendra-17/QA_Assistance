@@ -223,6 +223,7 @@ export function safeErrorMessage(err: unknown, context: string): string {
 export type SecurityEvent =
   | "AUTH_MISSING"
   | "AUTH_INVALID"
+  | "AUTH_FAILED"
   | "SSRF_BLOCKED"
   | "INPUT_REJECTED"
   | "FILE_REJECTED"

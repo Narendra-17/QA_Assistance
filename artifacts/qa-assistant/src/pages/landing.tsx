@@ -1,6 +1,6 @@
-import { useAuth } from "@workspace/replit-auth-web";
 import { Button } from "@/components/ui/button";
 import { motion } from "framer-motion";
+import { Link } from "wouter";
 import {
   ShieldCheck, ArrowRight, Zap, FileCode2, BrainCircuit,
   CheckCircle2, Sparkles, Globe, Lock, Code2,
@@ -175,7 +175,6 @@ const TESTIMONIALS = [
 
 // ── Landing ───────────────────────────────────────────────────────────────────
 export default function Landing() {
-  const { login } = useAuth();
   const word = useTypewriter(TYPEWRITER_WORDS);
 
   return (
@@ -203,10 +202,14 @@ export default function Landing() {
             <span className="font-display font-extrabold text-xl tracking-tight text-white">QA<span className="text-violet-400">Assistant</span></span>
           </motion.div>
           <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="flex items-center gap-2">
-            <Button variant="ghost" onClick={login} className="text-zinc-400 hover:text-white hover:bg-white/5 rounded-xl px-5">Sign In</Button>
-            <Button onClick={login} className="bg-violet-600 hover:bg-violet-500 text-white rounded-xl px-5 shadow-lg shadow-violet-900/40 hover-lift">
-              Get Started <ArrowRight className="ml-1.5 w-4 h-4" />
-            </Button>
+            <Link href="/login">
+              <Button variant="ghost" className="text-zinc-400 hover:text-white hover:bg-white/5 rounded-xl px-5">Sign In</Button>
+            </Link>
+            <Link href="/register">
+              <Button className="bg-violet-600 hover:bg-violet-500 text-white rounded-xl px-5 shadow-lg shadow-violet-900/40 hover-lift">
+                Get Started <ArrowRight className="ml-1.5 w-4 h-4" />
+              </Button>
+            </Link>
           </motion.div>
         </div>
       </nav>
@@ -241,14 +244,18 @@ export default function Landing() {
 
             <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.28 }}
               className="flex flex-col sm:flex-row gap-3 mb-10">
-              <Button size="lg" onClick={login}
-                className="h-[3.25rem] px-8 rounded-2xl text-base font-semibold bg-gradient-to-r from-violet-600 to-violet-500 hover:from-violet-500 hover:to-violet-400 text-white shadow-2xl shadow-violet-900/45 hover-lift">
-                <Zap className="mr-2 w-5 h-5" /> Start Testing Free
-              </Button>
-              <Button size="lg" variant="outline" onClick={login}
-                className="h-[3.25rem] px-8 rounded-2xl text-base border-white/10 bg-white/4 hover:bg-white/7 text-white hover-lift">
-                <FileCode2 className="mr-2 w-5 h-5 text-cyan-400" /> Scan Source Code
-              </Button>
+              <Link href="/register">
+                <Button size="lg"
+                  className="h-[3.25rem] px-8 rounded-2xl text-base font-semibold bg-gradient-to-r from-violet-600 to-violet-500 hover:from-violet-500 hover:to-violet-400 text-white shadow-2xl shadow-violet-900/45 hover-lift">
+                  <Zap className="mr-2 w-5 h-5" /> Start Testing Free
+                </Button>
+              </Link>
+              <Link href="/register">
+                <Button size="lg" variant="outline"
+                  className="h-[3.25rem] px-8 rounded-2xl text-base border-white/10 bg-white/4 hover:bg-white/7 text-white hover-lift">
+                  <FileCode2 className="mr-2 w-5 h-5 text-cyan-400" /> Scan Source Code
+                </Button>
+              </Link>
             </motion.div>
 
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.38 }}
@@ -422,10 +429,12 @@ export default function Landing() {
               </div>
               <h2 className="font-display font-bold text-3xl md:text-4xl text-white mb-3">Ready to ship with confidence?</h2>
               <p className="text-zinc-400 mb-8 max-w-md mx-auto">Join developers who catch security issues before their users — or their attackers — do.</p>
-              <Button size="lg" onClick={login}
-                className="h-14 px-10 rounded-2xl font-semibold bg-violet-600 hover:bg-violet-500 text-white shadow-xl shadow-violet-900/50 hover-lift">
-                Get Started — It's Free <ArrowRight className="ml-2 w-5 h-5" />
-              </Button>
+              <Link href="/register">
+                <Button size="lg"
+                  className="h-14 px-10 rounded-2xl font-semibold bg-violet-600 hover:bg-violet-500 text-white shadow-xl shadow-violet-900/50 hover-lift">
+                  Get Started — It's Free <ArrowRight className="ml-2 w-5 h-5" />
+                </Button>
+              </Link>
             </div>
           </div>
         </motion.div>

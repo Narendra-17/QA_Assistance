@@ -15,7 +15,7 @@ AI-powered QA Assistant web app. Users log in, submit app URLs or upload source 
 - **Validation**: Zod v3
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (ESM bundle)
-- **Auth**: Replit Auth (OIDC with PKCE) + API key auth (for CI/CD)
+- **Auth**: Custom email+password auth (bcryptjs rounds=12, HTTP-only session cookies) + API key auth (for CI/CD)
 - **AI**: OpenAI (GPT-4o) via Replit AI Integrations
 - **Frontend**: React + Vite + Tailwind CSS + shadcn/ui + Framer Motion
 - **File upload**: multer (in-memory, multipart/form-data)
@@ -60,8 +60,8 @@ artifacts-monorepo/
 
 ## DB Schema
 
-- `sessions` — Replit Auth sessions
-- `users` — Authenticated users
+- `sessions` — User sessions (sid, sess JSONB, expire)
+- `users` — Registered users (email, passwordHash bcrypt, firstName, lastName)
 - `qa_runs` — QA/SAST test runs (url|sast type, status, report JSONB)
 - `share_tokens` — Time-limited public read-only share links (UUID token, expiresAt)
 - `issue_statuses` — Per-issue lifecycle: open | acknowledged | resolved | wont_fix
@@ -71,7 +71,9 @@ artifacts-monorepo/
 
 ### Auth
 - `GET  /api/auth/user` — Current auth state
-- `GET  /api/login` + `GET /api/callback` + `GET /api/logout` — OIDC flow
+- `POST /api/auth/register` — Register (name, email, password ≥8 chars) → sets session cookie
+- `POST /api/auth/login` — Login (email, password) → sets session cookie
+- `POST /api/auth/logout` — Clears session cookie + deletes DB session
 
 ### QA runs (session auth OR Bearer API key)
 - `GET  /api/qa/runs` — List user's QA runs
@@ -133,7 +135,9 @@ artifacts-monorepo/
 
 ## Frontend Pages
 
-- `/` (unauthenticated) — Landing page
+- `/login` — Sign-in page (dark themed, email+password, show/hide toggle, error display)
+- `/register` — Registration page (name, email, password, confirm, client-side validation)
+- `/` (unauthenticated) — Landing page (links to /login and /register)
 - `/` (authenticated) — Dashboard with stats + run history
 - `/new` — New URL test form
 - `/sast` — New SAST scan (file upload)
@@ -150,11 +154,12 @@ artifacts-monorepo/
 - **CORS**: Locked to Replit preview domains
 - **UUID validation**: All `:id` params validated before DB queries
 - **API keys**: Bearer token format `qak_<64hex>`, SHA-256 hashed at rest
-- **Rate limiting**: 10 req/min on analysis endpoints, 120 req/min global
+- **Rate limiting**: 10 attempts/15 min on auth endpoints, 10 req/min on analysis, 120 req/min global
 - **Security audit log**: All SSRF, auth, and input-rejection events logged
 
 ## Important Notes
 
+- After changing `lib/db/src/schema/`, run `pnpm --filter @workspace/db run push` then `cd lib/db && npx tsc -p tsconfig.json` to rebuild declarations
 - After running codegen (`pnpm --filter @workspace/api-spec run codegen`), rebuild TypeScript declarations for libs: `cd lib/api-client-react && npx tsc -b --force` and `cd lib/replit-auth-web && npx tsc -b --force`
 - DB push: `pnpm --filter @workspace/db run push-force`
 - The `multer` v2 + `@types/multer` v1 combination is intentional (types are compatible)
