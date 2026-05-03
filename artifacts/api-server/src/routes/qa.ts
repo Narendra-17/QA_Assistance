@@ -112,12 +112,70 @@ function recalculateScore(issues: Array<{ severity: string }>): number {
 
 // ─── Analysis helpers ────────────────────────────────────────────────────────
 
+// ─── DAST header grader ───────────────────────────────────────────────────────
+
+interface HeaderGrade {
+  value: string | null;
+  grade: "secure" | "weak" | "absent";
+  note: string;
+}
+
+function gradeSecurityHeaders(headers: Record<string, string | null>): Record<string, HeaderGrade> {
+  const g = (value: string | null, grade: HeaderGrade["grade"], note: string): HeaderGrade =>
+    ({ value, grade, note });
+
+  const csp = headers["content-security-policy"];
+  const hsts = headers["strict-transport-security"];
+  const xcto = headers["x-content-type-options"];
+  const xfo = headers["x-frame-options"];
+  const rp = headers["referrer-policy"];
+  const pp = headers["permissions-policy"];
+
+  return {
+    "Content-Security-Policy": csp == null
+      ? g(null, "absent", "Header not present — no CSP enforced")
+      : /unsafe-inline|unsafe-eval|unsafe-hashes/i.test(csp)
+        ? g(csp.slice(0, 200), "weak", "CSP present but contains unsafe directives (unsafe-inline/unsafe-eval)")
+        : g(csp.slice(0, 200), "secure", "CSP is present with no unsafe directives"),
+
+    "Strict-Transport-Security": hsts == null
+      ? g(null, "absent", "HSTS not set — browser may allow HTTP downgrade")
+      : /max-age=0/i.test(hsts)
+        ? g(hsts, "weak", "HSTS present but max-age=0 effectively disables it")
+        : /max-age=(\d+)/.test(hsts) && parseInt(hsts.match(/max-age=(\d+)/i)?.[1] ?? "0") < 2592000
+          ? g(hsts, "weak", "HSTS max-age is under 30 days (recommended ≥ 1 year)")
+          : g(hsts, "secure", "HSTS present with sufficient max-age"),
+
+    "X-Content-Type-Options": xcto == null
+      ? g(null, "absent", "Header absent — browser MIME sniffing is enabled")
+      : xcto.toLowerCase().trim() === "nosniff"
+        ? g(xcto, "secure", "Correctly set to nosniff")
+        : g(xcto, "weak", `Present but value is '${xcto}' instead of 'nosniff'`),
+
+    "X-Frame-Options": xfo == null
+      ? g(null, "absent", "Clickjacking protection absent (no X-Frame-Options or CSP frame-ancestors)")
+      : /^(DENY|SAMEORIGIN)$/i.test(xfo.trim())
+        ? g(xfo, "secure", "Correctly restricts framing")
+        : g(xfo, "weak", `Value '${xfo}' is not a standard directive`),
+
+    "Referrer-Policy": rp == null
+      ? g(null, "absent", "No Referrer-Policy — browser default may leak URLs")
+      : /no-referrer|strict-origin/i.test(rp)
+        ? g(rp, "secure", "Restrictive referrer policy in place")
+        : g(rp, "weak", `Policy '${rp}' may leak URL data to third parties`),
+
+    "Permissions-Policy": pp == null
+      ? g(null, "absent", "No Permissions-Policy — browser features unrestricted")
+      : g(pp.slice(0, 150), "secure", "Permissions-Policy is present"),
+  };
+}
+
 async function analyzeUrl(
   appUrl: string,
   appDescription: string,
 ): Promise<Record<string, unknown>> {
-  let pageContent = "";
-  const securityHeaders: Record<string, string | null> = {
+  const isHttps = appUrl.startsWith("https://");
+  const rawHeaders: Record<string, string | null> = {
     "strict-transport-security": null,
     "content-security-policy": null,
     "x-content-type-options": null,
@@ -125,65 +183,175 @@ async function analyzeUrl(
     "x-xss-protection": null,
     "referrer-policy": null,
     "permissions-policy": null,
+    "access-control-allow-origin": null,
+    "x-powered-by": null,
+    "server": null,
+    "cache-control": null,
   };
 
+  let pageData: Record<string, unknown> = { url: appUrl, fetchError: "Fetch not attempted" };
+
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15_000);
+    // ── Parallel: main fetch + optional HTTP→HTTPS redirect check + CORS probe ──
+    const mainController = new AbortController();
+    const mainTimer = setTimeout(() => mainController.abort(), 15_000);
+    const startTime = Date.now();
     const resp = await fetch(appUrl, {
-      signal: controller.signal,
+      signal: mainController.signal,
       headers: { "User-Agent": "QAAssistant/1.0 (security-scanner)" },
       redirect: "follow",
     });
-    clearTimeout(timeout);
+    const responseTimeMs = Date.now() - startTime;
+    clearTimeout(mainTimer);
 
-    for (const h of Object.keys(securityHeaders)) {
-      securityHeaders[h] = resp.headers.get(h);
+    for (const h of Object.keys(rawHeaders)) {
+      rawHeaders[h] = resp.headers.get(h);
+    }
+
+    // ── CORS probe: does server reflect arbitrary Origin? ─────────────────
+    let corsProbe: { reflectsArbitraryOrigin: boolean; allowOrigin: string | null; allowCredentials: string | null } | null = null;
+    try {
+      const corsCtrl = new AbortController();
+      const corsTimer = setTimeout(() => corsCtrl.abort(), 6_000);
+      const corsResp = await fetch(appUrl, {
+        signal: corsCtrl.signal,
+        headers: {
+          "User-Agent": "QAAssistant/1.0 (security-scanner)",
+          "Origin": "https://evil-attacker.example.com",
+        },
+      });
+      clearTimeout(corsTimer);
+      const allowOrigin = corsResp.headers.get("access-control-allow-origin");
+      const allowCredentials = corsResp.headers.get("access-control-allow-credentials");
+      corsProbe = {
+        reflectsArbitraryOrigin: allowOrigin === "*" || allowOrigin === "https://evil-attacker.example.com",
+        allowOrigin,
+        allowCredentials,
+      };
+    } catch { /* non-fatal */ }
+
+    // ── HTTP→HTTPS redirect check ─────────────────────────────────────────
+    let httpToHttpsRedirect: "yes" | "no" | "n/a" = "n/a";
+    if (isHttps) {
+      try {
+        const httpUrl = appUrl.replace(/^https:\/\//, "http://");
+        const rCtrl = new AbortController();
+        const rTimer = setTimeout(() => rCtrl.abort(), 5_000);
+        const rResp = await fetch(httpUrl, { signal: rCtrl.signal, redirect: "manual",
+          headers: { "User-Agent": "QAAssistant/1.0 (security-scanner)" } });
+        clearTimeout(rTimer);
+        const location = rResp.headers.get("location") ?? "";
+        httpToHttpsRedirect = (rResp.status >= 301 && rResp.status <= 308 && location.startsWith("https://"))
+          ? "yes" : "no";
+      } catch { httpToHttpsRedirect = "no"; }
     }
 
     const html = await resp.text();
-    const title = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] ?? "N/A";
-    const headings = [...html.matchAll(/<h[1-3][^>]*>([^<]+)<\/h/gi)].slice(0, 10).map(m => m[1]);
-    const forms = (html.match(/<form/gi) ?? []).length;
-    const links = (html.match(/<a\s+[^>]*href/gi) ?? []).length;
-    const inputs = (html.match(/<input/gi) ?? []).length;
-    const scripts = (html.match(/<script/gi) ?? []).length;
-    const metaTags = [...html.matchAll(/<meta[^>]+>/gi)].slice(0, 5).map(m => m[0].slice(0, 200));
 
-    pageContent = JSON.stringify({
-      url: appUrl, statusCode: resp.status,
-      isHttps: appUrl.startsWith("https://"),
-      title, headings, formCount: forms, linkCount: links,
-      inputCount: inputs, scriptCount: scripts, securityHeaders, metaTags,
+    // ── Cookie analysis ───────────────────────────────────────────────────
+    const rawSetCookies: string[] = [];
+    resp.headers.forEach((value, key) => {
+      if (key.toLowerCase() === "set-cookie") rawSetCookies.push(value);
     });
+    const cookies = rawSetCookies.slice(0, 10).map(c => ({
+      nameHint: c.split("=")[0].trim().slice(0, 30),
+      httpOnly: /;\s*httponly/i.test(c),
+      secure: /;\s*secure/i.test(c),
+      sameSite: /samesite=(strict|lax|none)/i.exec(c)?.[1]?.toLowerCase() ?? "not-set",
+    }));
+
+    // ── HTML intelligence ─────────────────────────────────────────────────
+    const title = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() ?? "N/A";
+    const formTags = [...html.matchAll(/<form[^>]*>/gi)].slice(0, 5);
+    const forms = formTags.map(m => ({
+      tag: m[0].slice(0, 150),
+      method: /method=["']?(get|post)/i.exec(m[0])?.[1]?.toLowerCase() ?? "not-set",
+      hasAction: /action=/i.test(m[0]),
+    }));
+    const inputTypes = [...html.matchAll(/<input[^>]+type=["']?(\w+)/gi)].map(m => m[1].toLowerCase());
+    const hasPasswordInput = inputTypes.includes("password");
+    const inlineScripts = (html.match(/<script(?:[^>](?!src=))*>/gi) ?? []).length;
+    const externalScripts = (html.match(/<script[^>]+src=/gi) ?? []).length;
+    const mixedContentRefs = isHttps
+      ? (html.match(/(?:src|href|action)=["']http:\/\//gi) ?? []).length
+      : 0;
+    const hasCsrfToken = /<(?:input|meta)[^>]+(?:csrf|_token|authenticity_token)[^>]*>/i.test(html);
+    const metaTags = [...html.matchAll(/<meta[^>]+>/gi)].slice(0, 6).map(m => m[0].slice(0, 200));
+
+    // ── Graded header analysis ────────────────────────────────────────────
+    const headerGrades = gradeSecurityHeaders(rawHeaders);
+
+    // ── Server fingerprint ────────────────────────────────────────────────
+    const serverFingerprint = rawHeaders["server"] ?? null;
+    const poweredBy = rawHeaders["x-powered-by"] ?? null;
+
+    pageData = {
+      url: appUrl,
+      statusCode: resp.status,
+      isHttps,
+      httpToHttpsRedirect,
+      responseTimeMs,
+      title,
+      headerGrades,
+      serverFingerprint,
+      poweredBy,
+      corsProbe,
+      cookies: cookies.length > 0 ? cookies : "none observed",
+      forms: { count: forms.length, details: forms },
+      inputs: { count: inputTypes.length, types: [...new Set(inputTypes)] },
+      hasPasswordInput,
+      hasCsrfToken,
+      scripts: { inline: inlineScripts, external: externalScripts },
+      mixedContentRefs,
+      metaTags,
+    };
   } catch (err) {
-    const fetchError = err instanceof Error ? err.message : String(err);
-    pageContent = JSON.stringify({ url: appUrl, fetchError, securityHeaders });
+    pageData = {
+      url: appUrl,
+      fetchError: err instanceof Error ? err.message : String(err),
+      isHttps,
+    };
   }
 
-  const prompt = `You are a senior QA engineer and security auditor. Produce a comprehensive quality report for this web application.
+  const prompt = `You are a senior application security engineer performing DAST (Dynamic Application Security Testing). Your ONLY job is to report issues that are DIRECTLY CONFIRMED by the measured scan data below — not theoretical, not inferred.
 
 Application URL: ${appUrl}
 Developer description: ${appDescription}
-Page data: ${pageContent}
+
+Measured scan data (real HTTP response values):
+${JSON.stringify(pageData, null, 2)}
+
+════════════ STRICT RULES — VIOLATIONS MAKE THE REPORT WORTHLESS ════════════
+1. EVIDENCE IS MANDATORY: Every issue MUST include an "evidence" field quoting the exact measured value from the scan data (e.g., "Strict-Transport-Security: absent", "CORS allowOrigin: *", "cookie 'session' missing Secure flag").
+2. NO SERVER-SIDE INFERENCE: You CANNOT see server-side code. Do NOT report SQL injection, XSS, CSRF (unless CSRF token absence is directly confirmed in a form), command injection, path traversal, or any code-level vulnerability — these require code access you do not have.
+3. SEVERITY CAPS:
+   - "critical": Only for CONFIRMED exploitable misconfigurations (e.g., CORS reflects arbitrary origin WITH credentials=true, cookies missing both Secure and HttpOnly on an HTTPS login page)
+   - "high": Confirmed bypass of a key security control (missing HSTS on HTTPS app, session cookie missing HttpOnly)
+   - "medium": Absent security header or sub-optimal configuration that increases attack surface
+   - "low": Informational / best-practice gap with low direct exploitability
+4. DO NOT DUPLICATE: One finding per root cause. Do not report "missing X-Frame-Options" AND "missing CSP frame-ancestors" as two separate issues — pick the relevant one.
+5. REPORT ONLY REAL FINDINGS: If a header is present and well-configured, say nothing about it. Do not invent issues to fill a quota. Returning 2 real issues is better than 8 invented ones.
+6. If fetch failed: Note the failure in the summary. Report only what can be observed from the URL structure (HTTP vs HTTPS, domain) — nothing else.
+════════════════════════════════════════════════════════════════════════════
 
 Respond with ONLY valid JSON:
 {
-  "summary": "2-3 sentence executive summary",
-  "attackChain": "4-6 sentence narrative written entirely from an attacker's perspective in present tense. Show exactly how they would discover the app, probe for weaknesses, and chain-exploit the vulnerabilities found to achieve a goal (data theft, account takeover, etc.). Be specific — name the vulnerability types being exploited in sequence.",
+  "summary": "2-3 sentence executive summary citing only confirmed findings",
+  "attackChain": "4-6 sentence narrative from attacker perspective using ONLY confirmed weaknesses. Do not invent server-side vulnerabilities.",
   "issues": [
     {
-      "title": "Issue title",
-      "description": "Detailed description",
+      "title": "Precise title naming the exact misconfiguration",
+      "description": "What is wrong and why it matters. Reference the measured value.",
+      "evidence": "The exact value observed (e.g., 'Content-Security-Policy: absent', 'Access-Control-Allow-Origin: *')",
       "severity": "critical|high|medium|low",
-      "possibleCause": "Root cause analysis",
-      "suggestedFix": "Actionable fix with concrete steps",
+      "possibleCause": "Root cause",
+      "suggestedFix": "Specific, actionable fix with example header/config value",
       "codeSnippet": null,
       "filePath": null,
       "lineNumber": null,
       "owasp": "A05:2021-Security Misconfiguration",
       "effortLevel": "low",
-      "effortNote": "Add one HTTP response header"
+      "effortNote": "One response header change"
     }
   ],
   "overallScore": <0-100>,
@@ -191,20 +359,120 @@ Respond with ONLY valid JSON:
   "testType": "url"
 }
 
-Rules:
-- owasp: exactly one of A01:2021-Broken Access Control, A02:2021-Cryptographic Failures, A03:2021-Injection, A04:2021-Insecure Design, A05:2021-Security Misconfiguration, A06:2021-Vulnerable Components, A07:2021-Identification and Authentication Failures, A08:2021-Software and Data Integrity Failures, A09:2021-Security Logging and Monitoring Failures, A10:2021-Server-Side Request Forgery
-- effortLevel: "low" (< 2 hours, config change or one-liner), "medium" (half-day to 2 days), or "high" (multiple days or architectural change)
-- If fetch failed, base analysis on URL and description. Score = 100 - (critical×25 + high×12 + medium×5 + low×2), min 0. Include 4-10 issues covering security, performance, accessibility, UX, SEO. Sort by severity desc.`;
+Score formula: 100 − (critical×20 + high×10 + medium×5 + low×2), minimum 0.
+OWASP: A01:2021-Broken Access Control | A02:2021-Cryptographic Failures | A03:2021-Injection | A04:2021-Insecure Design | A05:2021-Security Misconfiguration | A06:2021-Vulnerable Components | A07:2021-Identification and Authentication Failures | A08:2021-Software and Data Integrity Failures | A09:2021-Security Logging and Monitoring Failures | A10:2021-Server-Side Request Forgery
+effortLevel: "low" (<2 h), "medium" (half-day–2 days), "high" (multi-day/architectural)
+Sort by severity descending. Maximum 8 issues.`;
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
-    temperature: 0.3,
+    temperature: 0.1,
     max_tokens: 4096,
   });
 
   return JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
+}
+
+// ─── SAST tech-stack detector ─────────────────────────────────────────────────
+
+function detectTechStack(files: Array<{ name: string; content: string }>): string {
+  const names = files.map(f => f.name.toLowerCase());
+  const tags: string[] = [];
+
+  if (names.some(n => n.endsWith("package.json"))) tags.push("Node.js/JavaScript");
+  if (names.some(n => n.endsWith(".ts") || n.endsWith(".tsx"))) tags.push("TypeScript");
+  if (names.some(n => n.endsWith(".py") || n.includes("requirements.txt"))) tags.push("Python");
+  if (names.some(n => n.endsWith(".java") || n.includes("pom.xml"))) tags.push("Java");
+  if (names.some(n => n.endsWith(".go") || n.includes("go.mod"))) tags.push("Go");
+  if (names.some(n => n.endsWith(".php"))) tags.push("PHP");
+  if (names.some(n => n.endsWith(".rb") || n.includes("gemfile"))) tags.push("Ruby");
+  if (names.some(n => n.endsWith(".rs") || n.includes("cargo.toml"))) tags.push("Rust");
+  if (names.some(n => n.endsWith(".tf") || n.endsWith(".hcl"))) tags.push("Terraform/IaC");
+  if (names.some(n => n.includes("dockerfile") || n.includes("docker-compose"))) tags.push("Docker");
+  if (names.some(n => n.endsWith(".yaml") && (n.includes("k8s") || n.includes("kubernetes") || n.includes("deploy")))) tags.push("Kubernetes");
+  if (names.some(n => n.endsWith(".env") || n.endsWith(".env.local") || n.endsWith(".env.production"))) tags.push("environment config files");
+  if (names.some(n => n.endsWith(".sql"))) tags.push("SQL");
+
+  const allContent = files.map(f => f.content).join(" ");
+  if (/express|fastify|koa|hapi/i.test(allContent)) tags.push("Express/Node HTTP server");
+  if (/django|flask|fastapi/i.test(allContent)) tags.push("Python web framework");
+  if (/react|vue|angular|svelte/i.test(allContent)) tags.push("Frontend framework (client-side)");
+  if (/jwt|jsonwebtoken|pyjwt/i.test(allContent)) tags.push("JWT auth");
+  if (/knex|sequelize|typeorm|prisma|drizzle/i.test(allContent)) tags.push("ORM/Query builder");
+  if (/mysql|postgres|mongodb|redis|sqlite/i.test(allContent)) tags.push("Database access");
+
+  return tags.length > 0 ? tags.join(", ") : "Unknown/Mixed";
+}
+
+// ─── SAST false-positive filter ───────────────────────────────────────────────
+
+interface RawIssue {
+  title?: unknown;
+  description?: unknown;
+  severity?: unknown;
+  confidence?: unknown;
+  codeSnippet?: unknown;
+  filePath?: unknown;
+  lineNumber?: unknown;
+  detectionMethod?: unknown;
+  owasp?: unknown;
+  effortLevel?: unknown;
+  effortNote?: unknown;
+  possibleCause?: unknown;
+  suggestedFix?: unknown;
+  exploitScenario?: unknown;
+  [key: string]: unknown;
+}
+
+/**
+ * Post-processing filter: removes or downgrades AI findings that lack sufficient
+ * evidence, are pure speculation, or duplicate existing issues.
+ */
+function filterSastIssues(rawIssues: RawIssue[], deterministicTitles: Set<string>): RawIssue[] {
+  const seen = new Set<string>();
+  const filtered: RawIssue[] = [];
+
+  for (const issue of rawIssues) {
+    const title = String(issue.title ?? "").trim();
+    const confidence = String(issue.confidence ?? "confirmed").toLowerCase();
+    const severity = String(issue.severity ?? "low").toLowerCase();
+    const snippet = issue.codeSnippet;
+    const exploitScenario = String(issue.exploitScenario ?? "").trim();
+
+    // Drop duplicates by title similarity (normalize title for comparison)
+    const titleKey = title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 40);
+    if (seen.has(titleKey)) continue;
+    seen.add(titleKey);
+
+    // Drop if title overlaps with a deterministic finding
+    const overlapsDeteministic = [...deterministicTitles].some(dt =>
+      dt.toLowerCase().includes(titleKey.slice(0, 20)) ||
+      titleKey.includes(dt.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20))
+    );
+    if (overlapsDeteministic) continue;
+
+    // Theoretical findings (confidence === "theoretical") with no code snippet
+    // are downgraded to low — they add noise at high/critical
+    if (confidence === "theoretical" && !snippet) {
+      if (severity === "critical" || severity === "high") {
+        issue.severity = "medium";
+        issue.description = `[Theoretical — no specific vulnerable code identified] ${String(issue.description ?? "")}`;
+      }
+    }
+
+    // Critical or high findings MUST have a code snippet OR an exploit scenario
+    // If neither is present, downgrade to medium
+    if ((severity === "critical" || severity === "high") && !snippet && !exploitScenario) {
+      issue.severity = "medium";
+      issue.description = `[Downgraded: no specific vulnerable code or exploit path provided] ${String(issue.description ?? "")}`;
+    }
+
+    filtered.push(issue);
+  }
+
+  return filtered;
 }
 
 async function analyzeCode(
@@ -222,60 +490,92 @@ async function analyzeCode(
     ...secretsToIssues(secretFindings),
     ...scaToIssues(scaFindings),
   ];
+  const deterministicTitles = new Set(deterministicIssues.map(i => i.title));
 
   // ── Phase 2: AI analysis ──────────────────────────────────────────────────
-  const filesSummary = files
+  // Use up to 5,000 chars per file (vs previous 2,500) to reduce context-truncation
+  // false positives. Prioritize source code files over config/lock files.
+  const prioritized = [
+    ...files.filter(f => {
+      const ext = path.extname(f.name).toLowerCase();
+      return [".ts",".tsx",".js",".jsx",".py",".java",".go",".php",".rb",".rs",".cs",".c",".cpp",".sh"].includes(ext);
+    }),
+    ...files.filter(f => {
+      const ext = path.extname(f.name).toLowerCase();
+      return ![".ts",".tsx",".js",".jsx",".py",".java",".go",".php",".rb",".rs",".cs",".c",".cpp",".sh"].includes(ext);
+    }),
+  ];
+
+  const filesSummary = prioritized
     .slice(0, 25)
-    .map(f => `### ${f.name}\n\`\`\`\n${f.content.slice(0, 2500)}\n\`\`\``)
+    .map(f => `### ${f.name}\n\`\`\`\n${f.content.slice(0, 5000)}\n\`\`\``)
     .join("\n\n");
 
   const fileTypes = [...new Set(files.map(f =>
-    path.extname(f.name).toLowerCase() || f.name.toLowerCase()
+    path.extname(f.name).toLowerCase() || path.basename(f.name).toLowerCase()
   ))].join(", ");
 
-  // Tell the AI which secrets/deps were already found so it doesn't repeat them
+  const techStack = detectTechStack(files);
+
   const alreadyFound = deterministicIssues.length > 0
-    ? `\n\nNOTE: The following issues have ALREADY been detected by deterministic analysis — do NOT duplicate them:\n${deterministicIssues.map(i => `• ${i.title}`).join("\n")}`
+    ? `\nALREADY DETECTED by deterministic scanners — do NOT repeat these:\n${deterministicIssues.map(i => `• ${i.title}`).join("\n")}\n`
     : "";
 
-  const prompt = `You are a senior security engineer and code auditor performing SAST. Analyze ALL provided files for security vulnerabilities, misconfigurations, and best-practice violations — adapting checks to the file types present.
+  const prompt = `You are a senior application security engineer performing SAST (Static Application Security Testing). Your goal is PRECISION over volume — a report with 3 real vulnerabilities is vastly better than one with 10 speculative findings.
 
 Project: ${projectName}
 Description: ${description}
+Tech stack detected: ${techStack}
 Files analyzed: ${files.length} (${fileTypes})
 ${alreadyFound}
 
 ${filesSummary}
 
-ANALYSIS RULES BY FILE TYPE:
-- Source code: SQL injection, XSS, insecure deserialization, broken auth, CSRF, path traversal, command injection, prototype pollution, insecure crypto, missing input validation, debug code, open redirects, IDOR, race conditions
-- Shell scripts: command injection, unquoted variables, unsafe eval/exec, privilege escalation, sensitive data in arguments
-- Templates: XSS via unescaped output, CSRF token absence, clickjacking, mixed content
-- CSS: CSS injection, data exfiltration
-- Config & environment: debug mode in production, overly permissive CORS, insecure defaults
-- IaC (.tf/.hcl/.bicep): permissive IAM, public storage, unencrypted stores, open security groups, no MFA
-- Kubernetes/Docker: privileged containers, running as root, exposed ports, no resource limits, secrets in env vars, latest tag, no read-only filesystem
-- Build/CI files: command injection in steps, insecure artifact storage, missing SAST steps
-- Database files: unparameterized queries, unencrypted PII, over-privileged roles
+════════════ STRICT ACCURACY RULES ════════════
+1. CITE THE CODE: Every finding MUST include a "codeSnippet" with the actual vulnerable line(s). If you cannot point to a specific line in the provided code that is vulnerable, do NOT report the issue.
+2. EXPLOIT REQUIRED: Every critical/high finding MUST include an "exploitScenario" — a concrete 1-2 sentence description of exactly how an attacker would exploit this specific code. Generic exploit descriptions are not acceptable.
+3. CONFIDENCE FIELD (required):
+   - "confirmed" — vulnerable code is clearly visible in the provided snippet
+   - "probable" — pattern strongly suggests a vulnerability but full context is missing
+   - "theoretical" — the pattern could be vulnerable depending on code not provided
+4. SEVERITY RULES:
+   - "critical": Directly exploitable with high impact (RCE, SQLi with raw string concat, auth bypass). Must be "confirmed" confidence.
+   - "high": Clear vulnerability, exploitable with moderate effort. Must be "confirmed" or "probable".
+   - "medium": Real weakness, exploitability depends on configuration or context. Any confidence level.
+   - "low": Best-practice gap, defense-in-depth suggestion.
+5. NO MINIMUM COUNT: Do NOT pad the report. If only 2 real issues exist, return 2. Return 0 if the code is clean.
+6. NO DUPLICATE CLASSES: Report a class of vulnerability once (e.g., if multiple files have unparameterized queries, report the worst instance and note it appears in multiple files — don't create one issue per file).
+7. CONTEXT AWARENESS: Consider the full file before flagging. If you see a dangerous function call, check if there is input validation or sanitization earlier in the same file before reporting it.
+════════════════════════════════════════════════
+
+Vulnerability checklist by file type (only report if directly observed in the code):
+- Server-side source: SQL injection (raw string concat with user input), command injection (child_process/exec with user input), path traversal (fs operations with user-controlled paths), insecure deserialization, SSRF, XXE, broken auth patterns, missing authorization checks, insecure crypto (MD5/SHA1 for passwords, weak IV, hardcoded keys)
+- Client-side/templates: Unescaped user-controlled values rendered as HTML (innerHTML, dangerouslySetInnerHTML), open redirects with user-controlled URLs
+- Config: debug/development mode in production builds, overly permissive CORS (allow all origins), insecure defaults
+- IaC: public S3 buckets, wildcard IAM permissions, unencrypted storage, exposed management ports
+- Docker/K8s: running as root, privileged containers, secrets in environment variables, no resource limits
+- CI/CD: user-controlled data in shell run steps (script injection), insecure artifact handling
 
 Respond with ONLY valid JSON:
 {
-  "summary": "2-3 sentence executive summary",
-  "attackChain": "4-6 sentence narrative written entirely from an attacker's perspective in present tense. Show exactly how they would obtain the code, identify the most critical vulnerability, exploit it, and escalate access — chain the vulnerabilities together. Be specific about what they gain at each step.",
+  "summary": "2-3 sentence executive summary. Be honest if the codebase is mostly clean.",
+  "attackChain": "4-6 sentence narrative from attacker perspective using only the confirmed vulnerabilities found. If none are critical/high, note the limited attack surface observed.",
   "issues": [
     {
-      "title": "Vulnerability title",
-      "description": "Detailed explanation",
+      "title": "Specific vulnerability title naming the function/pattern",
+      "description": "Explanation of the vulnerability and why the specific code is dangerous",
+      "exploitScenario": "Concrete 1-2 sentence example of how an attacker exploits THIS code",
+      "confidence": "confirmed|probable|theoretical",
       "severity": "critical|high|medium|low",
       "possibleCause": "Root cause",
-      "suggestedFix": "Concrete actionable fix with code example where relevant",
-      "codeSnippet": "Relevant vulnerable snippet (or null)",
-      "filePath": "path/to/file.ext or null",
+      "suggestedFix": "Concrete fix with corrected code example",
+      "codeSnippet": "The exact vulnerable line(s) from the provided files",
+      "filePath": "path/to/file.ext",
       "lineNumber": null,
       "detectionMethod": "ai",
       "owasp": "A03:2021-Injection",
       "effortLevel": "medium",
-      "effortNote": "Parameterize all DB queries throughout the codebase"
+      "effortNote": "Must update all raw query calls in this file"
     }
   ],
   "overallScore": 0,
@@ -283,23 +583,26 @@ Respond with ONLY valid JSON:
   "testType": "sast"
 }
 
-- owasp: exactly one of A01:2021-Broken Access Control, A02:2021-Cryptographic Failures, A03:2021-Injection, A04:2021-Insecure Design, A05:2021-Security Misconfiguration, A06:2021-Vulnerable Components, A07:2021-Identification and Authentication Failures, A08:2021-Software and Data Integrity Failures, A09:2021-Security Logging and Monitoring Failures, A10:2021-Server-Side Request Forgery
-- effortLevel: "low" (< 2 hours), "medium" (half-day to 2 days), "high" (multiple days or architectural change)
-- Return 4-12 NEW issues only (not already listed above). Set overallScore to 0 — it will be recalculated. Sort by severity descending.`;
+OWASP: A01:2021-Broken Access Control | A02:2021-Cryptographic Failures | A03:2021-Injection | A04:2021-Insecure Design | A05:2021-Security Misconfiguration | A06:2021-Vulnerable Components | A07:2021-Identification and Authentication Failures | A08:2021-Software and Data Integrity Failures | A09:2021-Security Logging and Monitoring Failures | A10:2021-Server-Side Request Forgery
+effortLevel: "low" (<2 h), "medium" (half-day–2 days), "high" (multi-day/architectural)
+Set overallScore to 0 — it will be recalculated server-side. Sort by severity descending.`;
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
-    temperature: 0.2,
+    temperature: 0.1,
     max_tokens: 4096,
   });
 
   const aiResult = JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
 
-  // ── Phase 3: Merge and recalculate score ──────────────────────────────────
-  const aiIssues = (aiResult.issues as Array<Record<string, unknown>>) ?? [];
-  const allIssues = [...deterministicIssues, ...aiIssues];
+  // ── Phase 3: Post-process AI findings to remove false positives ───────────
+  const rawAiIssues = (aiResult.issues as RawIssue[]) ?? [];
+  const filteredAiIssues = filterSastIssues(rawAiIssues, deterministicTitles);
+
+  // ── Phase 4: Merge and recalculate score ──────────────────────────────────
+  const allIssues = [...deterministicIssues, ...filteredAiIssues];
   const score = recalculateScore(allIssues as Array<{ severity: string }>);
 
   return {

@@ -249,29 +249,68 @@ function shannonEntropy(s: string): number {
   return entropy;
 }
 
+// ─── Entropy false-positive allowlist ────────────────────────────────────────
+
+/** UUID v4 pattern — high entropy but not a secret */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Lock-file basenames — they legitimately contain many high-entropy hashes */
+const LOCKFILE_BASENAMES = new Set([
+  "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "pnpm-lock.yml",
+  "cargo.lock", "gemfile.lock", "poetry.lock", "composer.lock", "go.sum",
+  "pipfile.lock", "shrinkwrap.json",
+]);
+
+/** Hex hash pattern (SHA-1, SHA-256, MD5 digests) — not secrets, just checksums */
+const HEX_HASH_RE = /^[0-9a-f]{32,64}$/i;
+
+/** Base64-encoded short public data — too short to be a real secret */
+const SHORT_BASE64_NOISE_RE = /^[A-Za-z0-9+/=]{20,32}$/;
+
+/** Test/example placeholder values that are never real secrets */
+const PLACEHOLDER_RE = /^(example|placeholder|your[-_]?(?:key|token|secret|password)|changeme|replace[-_]?me|xxxxxxxx|0{8,}|1{8,}|a{8,}|test[-_]?(?:key|secret)|fake[-_]?(?:key|secret)|demo[-_]?(?:key|secret))/i;
+
 /**
  * Detect high-entropy strings assigned to "key-like" variable names.
  * This catches secrets not covered by specific patterns.
  */
 function detectHighEntropySecrets(content: string, filename: string): SecretFinding[] {
   const findings: SecretFinding[] = [];
+
+  // Skip lock files — they contain thousands of high-entropy hashes
+  const base = filename.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  if (LOCKFILE_BASENAMES.has(base)) return [];
+
+  // Skip test fixtures and mock data
+  if (/(?:__fixtures__|__mocks__|\.test\.|\.spec\.|\/test\/|\/tests\/|\/spec\/)/.test(filename)) return [];
+
   const lines = content.split("\n");
 
-  const KEY_LIKE_VAR = /(?:key|token|secret|password|passwd|pwd|api|auth|credential|cred|private|passphrase|cert)/i;
-  // Match: varName = "value" or varName: "value"
+  const KEY_LIKE_VAR = /(?:key|token|secret|password|passwd|pwd|api_?key|auth|credential|cred|private|passphrase|cert)/i;
   const ASSIGNMENT_RE = /(?:[\w_]+)\s*[:=]\s*["']([A-Za-z0-9+/=_\-]{20,})["']/g;
 
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
     const line = lines[lineIdx];
-    // Only process lines with key-like variable names (quick filter)
     if (!KEY_LIKE_VAR.test(line)) continue;
+
+    // Skip commented-out lines
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("*") || trimmed.startsWith("/*")) continue;
 
     let match: RegExpExecArray | null;
     ASSIGNMENT_RE.lastIndex = 0;
     while ((match = ASSIGNMENT_RE.exec(line)) !== null) {
       const value = match[1];
+
+      // Skip known non-secret patterns
       if (!ENTROPY_CHARSET_RE.test(value)) continue;
       if (value.length < ENTROPY_MIN_LENGTH) continue;
+      if (UUID_RE.test(value)) continue;
+      if (HEX_HASH_RE.test(value)) continue;
+      if (PLACEHOLDER_RE.test(value)) continue;
+      // Very short base64-looking strings (20-32 chars) are often hashed IDs, not secrets
+      if (SHORT_BASE64_NOISE_RE.test(value) && value.length < 28) continue;
+
       const entropy = shannonEntropy(value);
       if (entropy >= ENTROPY_HIGH_THRESHOLD) {
         findings.push({
@@ -281,8 +320,8 @@ function detectHighEntropySecrets(content: string, filename: string): SecretFind
           filePath: filename,
           lineNumber: lineIdx + 1,
           redactedValue: `${value.slice(0, 4)}${"*".repeat(Math.min(value.length - 8, 20))}${value.slice(-4)}`,
-          description: `A high-entropy string (Shannon entropy: ${entropy.toFixed(2)} bits/char) assigned to a credential-like variable was found. This is a strong indicator of a hardcoded secret.`,
-          fix: "Replace with an environment variable. Use a secrets manager for storage.",
+          description: `A high-entropy string (Shannon entropy: ${entropy.toFixed(2)} bits/char) assigned to a credential-like variable name was found. This is a strong indicator of a hardcoded secret.`,
+          fix: "Replace with an environment variable reference. Use a .env file (never committed) or a secrets manager.",
         });
       }
     }
