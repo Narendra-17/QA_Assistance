@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 
 const urlSchema = z.object({
   appUrl: z.string().url("Enter a valid URL (e.g., https://example.com)"),
@@ -86,14 +86,20 @@ export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "s
   const searchParams = new URLSearchParams(search);
   const prefillUrl = searchParams.get("url") ?? "";
   const prefillDesc = searchParams.get("desc") ?? "";
+  const isPrefilledUrl = !!prefillUrl;
 
-  const [tab, setTab] = useState<"url" | "sast">(prefillUrl ? "url" : initialTab);
+  const [tab, setTab] = useState<"url" | "sast">(isPrefilledUrl ? "url" : initialTab);
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const urlForm = useForm<UrlForm>({ resolver: zodResolver(urlSchema), defaultValues: { appUrl: prefillUrl, appDescription: prefillDesc } });
   const sastForm = useForm<SastForm>({ resolver: zodResolver(sastSchema), defaultValues: { projectName: "", description: "" } });
+
+  useEffect(() => {
+    if (prefillUrl) urlForm.setValue("appUrl", prefillUrl, { shouldDirty: false, shouldTouch: false, shouldValidate: true });
+    if (prefillDesc) urlForm.setValue("appDescription", prefillDesc, { shouldDirty: false, shouldTouch: false, shouldValidate: true });
+  }, [prefillUrl, prefillDesc, urlForm]);
 
   const descValue = urlForm.watch("appDescription");
   const sastDescValue = sastForm.watch("description");
