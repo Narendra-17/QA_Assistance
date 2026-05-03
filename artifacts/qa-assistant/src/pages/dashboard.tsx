@@ -28,11 +28,11 @@ import {
 
 const CONTAINER: Variants = {
   hidden: { opacity: 0 },
-  show:   { opacity: 1, transition: { staggerChildren: 0.05 } },
+  show:   { opacity: 1, transition: { staggerChildren: 0.06 } },
 };
 const ITEM: Variants = {
-  hidden: { opacity: 0, y: 12 },
-  show:   { opacity: 1, y: 0, transition: { type: "spring", stiffness: 320, damping: 28 } },
+  hidden: { opacity: 0, y: 14 },
+  show:   { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 26 } },
 };
 
 // ── Animated counter ──────────────────────────────────────────────────────────
@@ -87,7 +87,9 @@ function LiveElapsed({ startedAt }: { startedAt: string }) {
   const elapsed = useLiveElapsed(startedAt, true);
   return (
     <span className="inline-flex items-center gap-1.5 text-xs text-blue-300 font-mono tabular-nums">
-      <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse shrink-0" />
+      <span className="relative w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0">
+        <span className="absolute inset-0 rounded-full bg-blue-400 animate-ping opacity-60" />
+      </span>
       {elapsed}
     </span>
   );
@@ -115,32 +117,45 @@ function ScoreTrendChart({ data }: { data: ScorePoint[] }) {
       <div className="flex items-center gap-3 flex-wrap">
         {last && (
           <div className="flex items-center gap-2">
-            <span className="font-display font-bold text-2xl tabular-nums" style={{ color: scoreColor(last.score) }}>{last.score}</span>
+            <span className="font-display font-bold text-2xl tabular-nums value-pop" style={{ color: scoreColor(last.score) }}>{last.score}</span>
             <span className="text-zinc-500 text-sm">latest score</span>
           </div>
         )}
         {Math.abs(delta) > 0 && (
-          <span className={["text-xs font-bold px-2 py-0.5 rounded-lg", delta > 0 ? "text-emerald-400 bg-emerald-500/10 border border-emerald-500/20" : "text-red-400 bg-red-500/10 border border-red-500/20"].join(" ")}>
+          <span className={[
+            "text-xs font-bold px-2.5 py-1 rounded-lg border",
+            delta > 0
+              ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/22"
+              : "text-red-400 bg-red-500/10 border-red-500/22",
+          ].join(" ")}>
             {delta > 0 ? "↑" : "↓"} {Math.abs(delta)} pts vs first run
           </span>
         )}
-        <span className="text-zinc-600 text-[11px] ml-auto">{data.length} completed run{data.length !== 1 ? "s" : ""}</span>
+        <span className="text-zinc-600 text-[11px] ml-auto font-mono">{data.length} run{data.length !== 1 ? "s" : ""}</span>
       </div>
-      <ResponsiveContainer width="100%" height={110}>
+      <ResponsiveContainer width="100%" height={112}>
         <AreaChart data={chartData} margin={{ top: 4, right: 4, left: -28, bottom: 0 }}>
           <defs>
             <linearGradient id="scoreGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%"  stopColor="#8B5CF6" stopOpacity={0.22} />
-              <stop offset="95%" stopColor="#8B5CF6" stopOpacity={0}    />
+              <stop offset="0%"  stopColor="#8B5CF6" stopOpacity={0.28} />
+              <stop offset="60%" stopColor="#8B5CF6" stopOpacity={0.07} />
+              <stop offset="100%" stopColor="#8B5CF6" stopOpacity={0} />
             </linearGradient>
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false} />
           <XAxis dataKey="date" tick={{ fontSize: 9, fill: "#52525b" }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
           <YAxis domain={[0, 100]} tick={{ fontSize: 9, fill: "#52525b" }} axisLine={false} tickLine={false} ticks={[0, 50, 100]} />
           <Tooltip
-            contentStyle={{ background: "hsl(230,24%,9%)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, fontSize: 11, padding: "8px 12px" }}
+            contentStyle={{
+              background: "hsl(230,24%,9%)",
+              border: "1px solid rgba(139,92,246,0.2)",
+              borderRadius: 12,
+              fontSize: 11,
+              padding: "8px 12px",
+              boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+            }}
             labelStyle={{ color: "#a1a1aa", marginBottom: 4 }}
-            cursor={{ stroke: "rgba(139,92,246,0.25)", strokeWidth: 1 }}
+            cursor={{ stroke: "rgba(139,92,246,0.3)", strokeWidth: 1, strokeDasharray: "4 2" }}
             formatter={(val: number, _: string, props: { payload?: { label?: string } }) => [
               <span key="v" style={{ color: scoreColor(val), fontWeight: 700 }}>{val}/100</span>,
               props.payload?.label ?? "",
@@ -148,7 +163,11 @@ function ScoreTrendChart({ data }: { data: ScorePoint[] }) {
           />
           <Area type="monotone" dataKey="score" stroke="#8B5CF6" strokeWidth={2} fill="url(#scoreGrad)"
             dot={(props: { cx?: number; cy?: number; payload?: { score: number }; index?: number }) => (
-              <circle key={props.index} cx={props.cx} cy={props.cy} r={3.5} fill={scoreColor(props.payload?.score ?? 0)} strokeWidth={0} />
+              <circle key={props.index} cx={props.cx} cy={props.cy} r={3.5}
+                fill={scoreColor(props.payload?.score ?? 0)}
+                stroke="hsl(230,25%,5%)"
+                strokeWidth={1.5}
+              />
             )}
           />
         </AreaChart>
@@ -169,15 +188,31 @@ function StatCard({ label, value, sub, icon: Icon, color, loading }: {
 
   return (
     <motion.div variants={ITEM}
-      className="group relative overflow-hidden rounded-2xl border border-white/8 p-5 flex items-start gap-4 transition-all duration-200 hover:border-white/14"
-      style={{ background: "linear-gradient(145deg,hsl(230 22% 8%),hsl(230 22% 7%))" }}>
-      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-        style={{ background: `radial-gradient(circle at 0% 0%, ${color}08 0%, transparent 70%)` }} />
-      <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 relative z-10 transition-transform group-hover:scale-110 duration-200"
-        style={{ background: `${color}18`, border: `1px solid ${color}28` }}>
+      className="group relative overflow-hidden rounded-2xl p-5 flex items-start gap-4 transition-all duration-250 cursor-default"
+      style={{
+        background: "linear-gradient(145deg, hsl(230,22%,8%), hsl(230,22%,7%))",
+        border: "1px solid rgba(255,255,255,0.07)",
+      }}
+      whileHover={{ y: -2 }}
+      transition={{ duration: 0.18 }}
+    >
+      {/* Colored top edge */}
+      <div className="absolute top-0 left-4 right-4 h-px transition-all duration-300"
+        style={{ background: `linear-gradient(90deg, transparent, ${color}60, transparent)` }} />
+
+      {/* Hover radial glow */}
+      <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-400 pointer-events-none"
+        style={{ background: `radial-gradient(ellipse at 0% 0%, ${color}0D 0%, transparent 65%)` }} />
+
+      {/* Icon */}
+      <div
+        className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 relative z-10 transition-all duration-200 group-hover:scale-110"
+        style={{ background: `${color}16`, border: `1px solid ${color}28`, boxShadow: `0 0 12px ${color}18` }}
+      >
         <Icon className="w-5 h-5" style={{ color }} />
       </div>
-      <div className="relative z-10 min-w-0">
+
+      <div className="relative z-10 min-w-0 flex-1">
         {loading ? (
           <div className="h-8 w-16 rounded-lg shimmer mb-1" />
         ) : (
@@ -188,6 +223,10 @@ function StatCard({ label, value, sub, icon: Icon, color, loading }: {
         <div className="text-sm text-zinc-400 mt-0.5 font-medium">{label}</div>
         {sub && <div className="text-xs text-zinc-600 mt-0.5">{sub}</div>}
       </div>
+
+      {/* Bottom right corner accent */}
+      <div className="absolute bottom-0 right-0 w-16 h-16 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
+        style={{ background: `radial-gradient(circle at 100% 100%, ${color}08, transparent 70%)` }} />
     </motion.div>
   );
 }
@@ -206,9 +245,9 @@ function SeverityBar({ issues }: { issues: Array<{ severity: string }> }) {
 
   return (
     <div className="hidden md:flex flex-col items-center gap-1 shrink-0">
-      <div className="flex h-1.5 w-14 rounded-full overflow-hidden gap-[1px] bg-white/5">
+      <div className="flex h-1.5 w-16 rounded-full overflow-hidden gap-[1.5px] bg-white/5">
         {counts.critical > 0 && (
-          <div className="bar-fill h-full rounded-sm" style={{ width: `${(counts.critical / total) * 100}%`, background: "#EF4444" }} />
+          <div className="bar-fill h-full rounded-sm" style={{ width: `${(counts.critical / total) * 100}%`, background: "linear-gradient(90deg,#EF4444,#DC2626)" }} />
         )}
         {counts.high > 0 && (
           <div className="bar-fill h-full rounded-sm" style={{ width: `${(counts.high / total) * 100}%`, background: "#F97316", animationDelay: "0.05s" }} />
@@ -240,25 +279,33 @@ function OwaspHeatmap({ breakdown }: { breakdown: Array<{ code: string; count: n
 
   return (
     <div className="space-y-2">
-      {breakdown.map(({ code, count, critical }) => {
+      {breakdown.map(({ code, count, critical }, idx) => {
         const name      = OWASP_NAMES[code] ?? code;
         const critRatio = critical / count;
         const barColor  = critRatio >= 0.5 ? "#EF4444" : critRatio >= 0.2 ? "#F97316" : "#F59E0B";
         const pct       = (count / maxCount) * 100;
         return (
-          <div key={code} className="flex items-center gap-3 group">
+          <motion.div
+            key={code}
+            className="flex items-center gap-3 group"
+            initial={{ opacity: 0, x: -8 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: idx * 0.05, duration: 0.3 }}
+          >
             <div className="w-[4.5rem] shrink-0 text-right">
               <span className="text-[10px] font-mono font-semibold text-zinc-500 group-hover:text-zinc-300 transition-colors">{code}</span>
             </div>
             <div className="flex-1 flex items-center gap-2 min-w-0">
-              <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
-                <div className="bar-fill h-full rounded-full"
-                  style={{ width: `${pct}%`, background: barColor }} />
+              <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.05)" }}>
+                <div
+                  className="bar-fill h-full rounded-full"
+                  style={{ width: `${pct}%`, background: `linear-gradient(90deg, ${barColor}, ${barColor}AA)` }}
+                />
               </div>
               <span className="text-[11px] font-semibold tabular-nums w-5 text-right shrink-0" style={{ color: barColor }}>{count}</span>
             </div>
-            <span className="text-[11px] text-zinc-500 w-40 shrink-0 truncate hidden lg:block">{name}</span>
-          </div>
+            <span className="text-[11px] text-zinc-500 group-hover:text-zinc-400 transition-colors w-44 shrink-0 truncate hidden lg:block">{name}</span>
+          </motion.div>
         );
       })}
     </div>
@@ -266,6 +313,15 @@ function OwaspHeatmap({ breakdown }: { breakdown: Array<{ code: string; count: n
 }
 
 type FilterType = "all" | "url" | "sast";
+
+// The API returns extra fields not reflected in the generated schema
+interface QaRunExtended {
+  id: string; userId: string; appUrl?: string | null; appDescription?: string | null;
+  projectName?: string | null; status: string; runType: string; errorMessage?: string | null;
+  createdAt: string; updatedAt: string;
+  score?: number | null;
+  issues?: Array<{ severity: string }> | null;
+}
 
 export default function Dashboard() {
   usePageTitle("Dashboard");
@@ -279,10 +335,9 @@ export default function Dashboard() {
   const deleteMutation = useDeleteQaRun();
   const queryClient    = useQueryClient();
 
-  const allRuns      = data?.runs ?? [];
+  const allRuns      = (data?.runs ?? []) as QaRunExtended[];
   const runningCount = allRuns.filter(r => r.status === "running" || r.status === "pending").length;
 
-  // Auto-refresh while scans are in progress
   useEffect(() => {
     if (runningCount === 0) return;
     const t = setInterval(() => { void refetch(); void refetchStats(); }, 3000);
@@ -322,7 +377,13 @@ export default function Dashboard() {
   return (
     <>
       <AlertDialog open={!!deleteId} onOpenChange={(o) => !o && setDeleteId(null)}>
-        <AlertDialogContent className="border-white/10 rounded-2xl" style={{ background: "hsl(230,24%,9%)" }}>
+        <AlertDialogContent
+          className="border-white/8 rounded-2xl overflow-hidden"
+          style={{ background: "hsl(230,24%,9%)", boxShadow: "0 32px 80px rgba(0,0,0,0.5)" }}
+        >
+          {/* Top accent line */}
+          <div className="absolute top-0 inset-x-0 h-px"
+            style={{ background: "linear-gradient(90deg, transparent, rgba(239,68,68,0.5), transparent)" }} />
           <AlertDialogHeader>
             <AlertDialogTitle className="text-white font-display">Delete this run?</AlertDialogTitle>
             <AlertDialogDescription className="text-zinc-400">
@@ -331,7 +392,11 @@ export default function Dashboard() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel className="border-white/10 bg-white/4 text-white hover:bg-white/8 rounded-xl">Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-red-600 hover:bg-red-500 text-white rounded-xl">
+            <AlertDialogAction
+              onClick={handleDelete}
+              className="bg-red-600 hover:bg-red-500 text-white rounded-xl transition-all"
+              style={{ boxShadow: "0 4px 16px rgba(239,68,68,0.3)" }}
+            >
               {deleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -339,34 +404,47 @@ export default function Dashboard() {
       </AlertDialog>
 
       <div className="max-w-5xl mx-auto w-full space-y-6">
-        {/* Header */}
-        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
-          className="flex items-start justify-between gap-4 flex-wrap">
+        {/* ── Header ── */}
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-start justify-between gap-4 flex-wrap"
+        >
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-display font-bold text-white">Dashboard</h1>
-              {runningCount > 0 && (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/15 border border-blue-500/25 text-blue-300">
-                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-                  {runningCount} running
-                </span>
-              )}
+              <AnimatePresence>
+                {runningCount > 0 && (
+                  <motion.span
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-500/12 border border-blue-500/25 text-blue-300 badge-pulse"
+                  >
+                    <span className="relative w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0">
+                      <span className="absolute inset-0 rounded-full bg-blue-400 animate-ping opacity-60" />
+                    </span>
+                    {runningCount} running
+                  </motion.span>
+                )}
+              </AnimatePresence>
             </div>
             <p className="text-zinc-500 mt-0.5 text-sm">Your security assessments and scan history.</p>
           </div>
           <div className="flex gap-2">
             <Button asChild variant="outline" size="sm"
-              className="border-white/10 bg-white/4 hover:bg-white/8 text-white rounded-xl h-9">
-              <Link href="/sast"><FileCode2 className="w-3.5 h-3.5 mr-1.5" />SAST Scan</Link>
+              className="border-white/10 bg-white/3 hover:bg-white/7 hover:border-cyan-500/25 text-zinc-300 hover:text-cyan-300 rounded-xl h-9 transition-all gap-1.5">
+              <Link href="/sast"><FileCode2 className="w-3.5 h-3.5" />SAST Scan</Link>
             </Button>
             <Button asChild size="sm"
-              className="bg-violet-600 hover:bg-violet-500 text-white rounded-xl shadow-lg shadow-violet-900/30 h-9">
-              <Link href="/new"><Plus className="w-3.5 h-3.5 mr-1.5" />New URL Test</Link>
+              className="bg-violet-600 hover:bg-violet-500 text-white rounded-xl h-9 btn-shimmer gap-1.5 transition-all"
+              style={{ boxShadow: "0 4px 16px rgba(139,92,246,0.35)" }}>
+              <Link href="/new"><Plus className="w-3.5 h-3.5" />New URL Test</Link>
             </Button>
           </div>
         </motion.div>
 
-        {/* Stats */}
+        {/* ── Stats grid ── */}
         <motion.div variants={CONTAINER} initial="hidden" animate="show" className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Total Runs"     value={stats?.totalRuns ?? 0}      icon={Activity}     color="#8B5CF6" loading={statsLoading} />
           <StatCard
@@ -389,7 +467,7 @@ export default function Dashboard() {
           />
         </motion.div>
 
-        {/* Score Trend + OWASP breakdown side-by-side */}
+        {/* ── Score trend + OWASP breakdown ── */}
         {!statsLoading && (() => {
           const history  = (stats as unknown as { scoreHistory?: ScorePoint[]; owaspBreakdown?: Array<{ code: string; count: number; critical: number }> } | undefined);
           const hasChart = (history?.scoreHistory?.length ?? 0) >= 2;
@@ -398,15 +476,24 @@ export default function Dashboard() {
           return (
             <div className={["grid gap-4", hasChart && owasp.length > 0 ? "lg:grid-cols-2" : "grid-cols-1"].join(" ")}>
               {hasChart && (
-                <motion.div variants={ITEM} initial="hidden" animate="show"
-                  className="p-5 rounded-2xl border border-white/8"
-                  style={{ background: "linear-gradient(145deg,hsl(230,22%,7%),hsl(230,22%,6%))" }}>
+                <motion.div
+                  variants={ITEM} initial="hidden" animate="show"
+                  className="p-5 rounded-2xl relative overflow-hidden"
+                  style={{
+                    background: "linear-gradient(145deg, hsl(230,22%,8%), hsl(230,22%,7%))",
+                    border: "1px solid rgba(139,92,246,0.12)",
+                  }}
+                >
+                  <div className="absolute top-0 inset-x-0 h-px"
+                    style={{ background: "linear-gradient(90deg, transparent, rgba(139,92,246,0.35), transparent)" }} />
                   <div className="flex items-center gap-2 mb-4">
-                    <TrendingUp className="w-4 h-4 text-violet-400" />
+                    <div className="w-7 h-7 rounded-lg bg-violet-500/14 border border-violet-500/20 flex items-center justify-center">
+                      <TrendingUp className="w-3.5 h-3.5 text-violet-400" />
+                    </div>
                     <p className="text-sm font-display font-semibold text-white">Security Score Trend</p>
-                    <div className="ml-auto flex items-center gap-1.5">
-                      {[0.6, 0.4, 0.2].map(o => (
-                        <span key={o} className="w-2 h-2 rounded-full bg-violet-500" style={{ opacity: o }} />
+                    <div className="ml-auto flex items-center gap-1">
+                      {[0.7, 0.4, 0.2].map(o => (
+                        <span key={o} className="w-1.5 h-1.5 rounded-full bg-violet-500" style={{ opacity: o }} />
                       ))}
                     </div>
                   </div>
@@ -414,11 +501,20 @@ export default function Dashboard() {
                 </motion.div>
               )}
               {owasp.length > 0 && (
-                <motion.div variants={ITEM} initial="hidden" animate="show"
-                  className="p-5 rounded-2xl border border-white/8"
-                  style={{ background: "linear-gradient(145deg,hsl(230,22%,7%),hsl(230,22%,6%))" }}>
+                <motion.div
+                  variants={ITEM} initial="hidden" animate="show"
+                  className="p-5 rounded-2xl relative overflow-hidden"
+                  style={{
+                    background: "linear-gradient(145deg, hsl(230,22%,8%), hsl(230,22%,7%))",
+                    border: "1px solid rgba(245,158,11,0.12)",
+                  }}
+                >
+                  <div className="absolute top-0 inset-x-0 h-px"
+                    style={{ background: "linear-gradient(90deg, transparent, rgba(245,158,11,0.35), transparent)" }} />
                   <div className="flex items-center gap-2 mb-4">
-                    <ShieldAlert className="w-4 h-4 text-amber-400" />
+                    <div className="w-7 h-7 rounded-lg bg-amber-500/12 border border-amber-500/20 flex items-center justify-center">
+                      <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                    </div>
                     <p className="text-sm font-display font-semibold text-white">Top Vulnerability Categories</p>
                     <span className="ml-auto text-[10px] text-zinc-600 font-mono">OWASP Top 10</span>
                   </div>
@@ -429,7 +525,7 @@ export default function Dashboard() {
           );
         })()}
 
-        {/* Search + filter */}
+        {/* ── Search + filter ── */}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.15 }}
           className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1 max-w-xs">
@@ -437,14 +533,26 @@ export default function Dashboard() {
             <Input
               value={search} onChange={(e) => setSearch(e.target.value)}
               placeholder="Search runs…"
-              className="pl-9 h-9 bg-white/4 border-white/10 focus-visible:border-violet-500/40 focus-visible:ring-violet-500/15 rounded-xl text-white placeholder:text-zinc-600 text-sm"
+              className="pl-9 h-9 bg-white/[0.03] border-white/8 focus-visible:border-violet-500/35 focus-visible:ring-0 rounded-xl text-white placeholder:text-zinc-600 text-sm transition-all"
+              style={{ outline: "none" }}
             />
           </div>
-          <div className="flex items-center gap-1 p-1 rounded-xl bg-white/4 border border-white/8 w-fit h-9">
+          {/* Filter tabs */}
+          <div className="flex items-center gap-1 p-1 rounded-xl w-fit h-9 relative"
+            style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}>
             {(["all", "url", "sast"] as FilterType[]).map((f) => (
               <button key={f} onClick={() => setFilter(f)}
-                className={["px-3 py-1 rounded-lg text-xs font-semibold transition-all h-7",
-                  filter === f ? "bg-violet-600 text-white shadow-md" : "text-zinc-400 hover:text-zinc-200"].join(" ")}>
+                className={[
+                  "relative px-3 py-1 rounded-lg text-xs font-semibold transition-all h-7",
+                  filter === f
+                    ? "text-white"
+                    : "text-zinc-500 hover:text-zinc-300",
+                ].join(" ")}
+                style={filter === f ? {
+                  background: "linear-gradient(135deg, hsl(258,85%,58%), hsl(258,80%,50%))",
+                  boxShadow: "0 2px 10px rgba(139,92,246,0.3)",
+                } : {}}
+              >
                 {f === "all"  ? `All (${allRuns.length})`
                   : f === "url"  ? `URL (${allRuns.filter(r => r.runType === "url").length})`
                     : `SAST (${allRuns.filter(r => r.runType === "sast").length})`}
@@ -453,7 +561,7 @@ export default function Dashboard() {
           </div>
         </motion.div>
 
-        {/* Runs list */}
+        {/* ── Runs list ── */}
         {isLoading ? (
           <div className="space-y-2">
             {Array.from({ length: 4 }).map((_, i) => (
@@ -463,7 +571,8 @@ export default function Dashboard() {
         ) : runs.length === 0 ? (
           search || filter !== "all" ? (
             <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }}
-              className="text-center py-16 rounded-2xl border border-white/6 bg-white/2">
+              className="text-center py-16 rounded-2xl"
+              style={{ background: "rgba(255,255,255,0.015)", border: "1px solid rgba(255,255,255,0.06)" }}>
               <Search className="w-9 h-9 text-zinc-600 mx-auto mb-3" />
               <h3 className="text-base font-display font-bold text-white mb-2">No matching runs</h3>
               <p className="text-zinc-500 text-sm">
@@ -471,187 +580,150 @@ export default function Dashboard() {
               </p>
             </motion.div>
           ) : (
-            /* First-run onboarding */
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
               <div className="text-center pt-8 pb-4">
                 <div className="relative w-16 h-16 mx-auto mb-5">
                   <div className="absolute inset-0 bg-violet-500/20 rounded-2xl blur-xl animate-pulse" />
-                  <div className="relative w-16 h-16 rounded-2xl bg-violet-500/15 border border-violet-500/25 flex items-center justify-center">
+                  <div className="relative w-16 h-16 rounded-2xl bg-violet-500/12 border border-violet-500/22 flex items-center justify-center">
                     <ShieldAlert className="w-8 h-8 text-violet-400" />
                   </div>
                 </div>
-                <h3 className="text-xl font-display font-bold text-white mb-2">Welcome to QA Assistant</h3>
-                <p className="text-zinc-500 text-sm max-w-md mx-auto">Your AI-powered security scanner. Run your first assessment to get started — no setup required.</p>
+                <h3 className="font-display font-bold text-lg text-white mb-1.5">Run your first assessment</h3>
+                <p className="text-zinc-500 text-sm max-w-sm mx-auto">
+                  Get an AI-powered security report in under 30 seconds — test a live URL or scan source code.
+                </p>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Link href="/new">
-                  <div className="group p-5 rounded-2xl border border-violet-500/15 bg-violet-500/4 hover:bg-violet-500/8 hover:border-violet-500/25 transition-all cursor-pointer">
-                    <div className="flex items-start gap-4">
-                      <div className="w-10 h-10 rounded-xl bg-violet-500/15 border border-violet-500/25 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
-                        <Globe className="w-5 h-5 text-violet-400" />
-                      </div>
-                      <div>
-                        <h4 className="font-display font-bold text-white text-sm mb-1">URL Test</h4>
-                        <p className="text-zinc-500 text-xs leading-relaxed">Paste a live URL. QA Assistant checks security headers and runs an AI-powered analysis covering security, accessibility, performance, and UX.</p>
-                      </div>
-                    </div>
-                    <div className="mt-4 flex items-center gap-1.5 text-violet-400 text-xs font-semibold">
-                      <Plus className="w-3.5 h-3.5" />Start URL Test
-                    </div>
-                  </div>
-                </Link>
-                <Link href="/sast">
-                  <div className="group p-5 rounded-2xl border border-cyan-500/15 bg-cyan-500/4 hover:bg-cyan-500/8 hover:border-cyan-500/25 transition-all cursor-pointer">
-                    <div className="flex items-start gap-4">
-                      <div className="w-10 h-10 rounded-xl bg-cyan-500/15 border border-cyan-500/25 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
-                        <FileCode2 className="w-5 h-5 text-cyan-400" />
-                      </div>
-                      <div>
-                        <h4 className="font-display font-bold text-white text-sm mb-1">SAST Code Scan</h4>
-                        <p className="text-zinc-500 text-xs leading-relaxed">Upload source code files. Detects hardcoded secrets, vulnerable dependencies via OSV.dev CVE database, and deep AI-powered vulnerability analysis.</p>
-                      </div>
-                    </div>
-                    <div className="mt-4 flex items-center gap-1.5 text-cyan-400 text-xs font-semibold">
-                      <Plus className="w-3.5 h-3.5" />Start SAST Scan
-                    </div>
-                  </div>
-                </Link>
-              </div>
-              <div className="grid grid-cols-3 gap-3">
+
+              <div className="grid sm:grid-cols-2 gap-3 max-w-lg mx-auto">
                 {[
-                  { icon: ShieldAlert,  label: "Secrets Detection", desc: "50+ credential patterns + entropy analysis", color: "#EF4444" },
-                  { icon: Activity,     label: "CVE Scanning",       desc: "Dependency vulnerabilities via OSV.dev",    color: "#F97316" },
-                  { icon: CheckCircle2, label: "Issue Tracking",     desc: "Mark issues resolved, acknowledged, or won't fix", color: "#10B981" },
-                ].map((f, i) => (
-                  <div key={i} className="p-4 rounded-2xl border border-white/6 bg-white/2">
-                    <f.icon className="w-5 h-5 mb-2" style={{ color: f.color }} />
-                    <p className="text-white text-xs font-semibold mb-1">{f.label}</p>
-                    <p className="text-zinc-600 text-[11px] leading-relaxed">{f.desc}</p>
-                  </div>
+                  { href: "/new",  Icon: Globe,     color: "#8B5CF6", label: "Test a live URL",    sub: "Security headers, XSS, perf",   bg: "rgba(139,92,246,0.08)",  border: "rgba(139,92,246,0.2)"  },
+                  { href: "/sast", Icon: FileCode2, color: "#06B6D4", label: "Scan source code",   sub: "SQL injection, secrets, IaC",    bg: "rgba(6,182,212,0.08)",   border: "rgba(6,182,212,0.2)"   },
+                ].map(({ href, Icon, color, label, sub, bg, border }) => (
+                  <Link key={href} href={href}>
+                    <div
+                      className="flex items-center gap-3.5 p-4 rounded-2xl cursor-pointer transition-all duration-200 group hover:-translate-y-0.5"
+                      style={{ background: bg, border: `1px solid ${border}` }}
+                    >
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-110"
+                        style={{ background: `${color}22`, border: `1px solid ${color}30` }}>
+                        <Icon className="w-5 h-5" style={{ color }} />
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold text-white">{label}</div>
+                        <div className="text-xs text-zinc-500 mt-0.5">{sub}</div>
+                      </div>
+                    </div>
+                  </Link>
                 ))}
               </div>
             </motion.div>
           )
         ) : (
           <motion.div variants={CONTAINER} initial="hidden" animate="show" className="space-y-2">
-            <AnimatePresence mode="popLayout">
+            <AnimatePresence>
               {runs.map((run) => {
-                const report     = (run as { report?: { overallScore?: number; issues?: Array<{ severity: string }> } }).report;
-                const score      = report?.overallScore;
-                const issues     = report?.issues ?? [];
-                const issueCount = issues.length > 0 ? issues.length : undefined;
                 const isUrl      = run.runType === "url";
                 const isRunning  = run.status === "running" || run.status === "pending";
+                const label      = run.appUrl ?? run.projectName ?? "Unnamed scan";
+                const hasScore   = run.status === "completed" && run.score != null;
+                const score      = run.score ?? 0;
 
                 return (
-                  <motion.div key={run.id} variants={ITEM} layout exit={{ opacity: 0, x: -16, transition: { duration: 0.2 } }}>
-                    <Link href={`/runs/${run.id}`} className="group block">
+                  <motion.div key={run.id} variants={ITEM} layout exit={{ opacity: 0, scale: 0.97 }}>
+                    <div
+                      onClick={() => setLocation(`/runs/${run.id}`)}
+                      className="group flex items-center gap-4 px-4 py-3.5 rounded-2xl cursor-pointer transition-all duration-200 relative overflow-hidden"
+                      style={{
+                        background: "linear-gradient(135deg, hsl(230,22%,8%), hsl(230,22%,7.5%))",
+                        border: "1px solid rgba(255,255,255,0.06)",
+                      }}
+                      onMouseEnter={e => {
+                        (e.currentTarget as HTMLElement).style.borderColor = "rgba(139,92,246,0.2)";
+                        (e.currentTarget as HTMLElement).style.background = "linear-gradient(135deg, hsl(230,22%,9%), hsl(230,22%,8%))";
+                      }}
+                      onMouseLeave={e => {
+                        (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.06)";
+                        (e.currentTarget as HTMLElement).style.background = "linear-gradient(135deg, hsl(230,22%,8%), hsl(230,22%,7.5%))";
+                      }}
+                    >
+                      {/* Left accent line on hover */}
+                      <div className="absolute left-0 top-[20%] bottom-[20%] w-0.5 rounded-r-full opacity-0 group-hover:opacity-100 transition-all duration-200"
+                        style={{ background: isUrl ? "rgba(139,92,246,0.7)" : "rgba(6,182,212,0.7)" }} />
+
+                      {/* Type icon */}
                       <div className={[
-                        "flex items-center gap-4 px-4 py-3.5 rounded-2xl border transition-all duration-200 cursor-pointer",
-                        isRunning
-                          ? "bg-blue-950/20 border-blue-500/15 hover:border-blue-500/25"
-                          : "bg-white/2 border-white/7 hover:bg-white/4 hover:border-white/12",
+                        "w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105",
+                        isUrl ? "bg-violet-500/12 border border-violet-500/18" : "bg-cyan-500/12 border border-cyan-500/18",
                       ].join(" ")}>
-                        {/* Type icon */}
-                        <div className={[
-                          "w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 duration-200",
-                          isUrl ? "bg-violet-500/12 border border-violet-500/18" : "bg-cyan-500/12 border border-cyan-500/18",
-                        ].join(" ")}>
-                          {isUrl
-                            ? <Globe className="w-4 h-4 text-violet-400" />
-                            : <FileCode2 className="w-4 h-4 text-cyan-400" />}
-                        </div>
-
-                        {/* Info */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-semibold text-white text-sm truncate max-w-[280px]">
-                              {run.appUrl ?? run.projectName ?? "Unnamed"}
-                            </span>
-                            <StatusBadge status={run.status as "pending" | "running" | "completed" | "failed"} />
-                          </div>
-                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                            {isRunning ? (
-                              <LiveElapsed startedAt={run.createdAt} />
-                            ) : (
-                              <span className="text-xs text-zinc-500">
-                                {formatDistanceToNow(new Date(run.createdAt), { addSuffix: true })}
-                              </span>
-                            )}
-                            <span className="text-zinc-700">·</span>
-                            <span className="text-xs text-zinc-600 capitalize">{isUrl ? "URL Test" : "SAST Scan"}</span>
-                            {issueCount !== undefined && (
-                              <>
-                                <span className="text-zinc-700">·</span>
-                                <span className="text-xs text-zinc-500">{issueCount} issue{issueCount !== 1 ? "s" : ""}</span>
-                              </>
-                            )}
-                            {run.status === "completed" && (() => {
-                              const secs = Math.round((new Date(run.updatedAt).getTime() - new Date(run.createdAt).getTime()) / 1000);
-                              if (secs < 1) return null;
-                              const dur = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
-                              return (
-                                <>
-                                  <span className="text-zinc-700">·</span>
-                                  <span className="text-xs text-zinc-600">{dur}</span>
-                                </>
-                              );
-                            })()}
-                          </div>
-                        </div>
-
-                        {/* Severity bar */}
-                        {run.status === "completed" && issues.length > 0 && (
-                          <SeverityBar issues={issues} />
-                        )}
-
-                        {/* Score */}
-                        {score !== undefined && (
-                          <div className="text-right shrink-0 hidden sm:block">
-                            <div className="text-lg font-display font-bold" style={{ color: scoreColor(score) }}>{score}</div>
-                            <div className="text-[10px] text-zinc-600 uppercase tracking-widest">/ 100</div>
-                          </div>
-                        )}
-
-                        {run.status === "completed" && score !== undefined && (
-                          <div className="shrink-0 hidden md:flex">
-                            {score >= 80
-                              ? <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                              : <AlertTriangle className={`w-4 h-4 ${score >= 60 ? "text-amber-500" : "text-red-500"}`} />}
-                          </div>
-                        )}
-
-                        {/* Re-scan (URL runs only) */}
-                        {run.runType === "url" && run.appUrl && (
-                          <button
-                            onClick={(e) => {
-                              e.preventDefault(); e.stopPropagation();
-                              const params = new URLSearchParams();
-                              params.set("url", run.appUrl!);
-                              if (run.appDescription) params.set("desc", run.appDescription);
-                              setLocation(`/new?${params.toString()}`);
-                            }}
-                            className="w-7 h-7 rounded-lg flex items-center justify-center text-zinc-600 hover:text-violet-400 hover:bg-violet-500/10 transition-all shrink-0 opacity-0 group-hover:opacity-100"
-                            title="Re-scan this URL"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-
-                        {/* Delete */}
-                        <button
-                          onClick={(e) => confirmDelete(run.id, e)}
-                          className="w-7 h-7 rounded-lg flex items-center justify-center text-zinc-600 hover:text-red-400 hover:bg-red-500/10 transition-all shrink-0 opacity-0 group-hover:opacity-100"
-                          title="Delete run"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {isUrl
+                          ? <Globe     className="w-4 h-4 text-violet-400" />
+                          : <FileCode2 className="w-4 h-4 text-cyan-400" />}
                       </div>
-                    </Link>
+
+                      {/* Label + meta */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-medium text-white group-hover:text-violet-100 transition-colors truncate">{label}</span>
+                          {isRunning && <LiveElapsed startedAt={run.createdAt} />}
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[11px] text-zinc-600">
+                            {formatDistanceToNow(new Date(run.createdAt), { addSuffix: true })}
+                          </span>
+                          <span className="text-zinc-700">·</span>
+                          <span className="text-[11px] text-zinc-600 font-mono uppercase">{run.runType}</span>
+                        </div>
+                      </div>
+
+                      {/* Severity bar */}
+                      {run.issues && <SeverityBar issues={run.issues} />}
+
+                      {/* Score badge */}
+                      {hasScore && (
+                        <div className="shrink-0 hidden sm:flex">
+                          <div
+                            className="text-xs font-bold font-mono tabular-nums px-2.5 py-1 rounded-lg border"
+                            style={{
+                              color: scoreColor(score),
+                              background: `${scoreColor(score)}14`,
+                              borderColor: `${scoreColor(score)}25`,
+                            }}
+                          >
+                            {score}/100
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Status badge */}
+                      <StatusBadge status={run.status as "pending" | "running" | "completed" | "failed"} />
+
+                      {/* Delete button */}
+                      <button
+                        onClick={(e) => confirmDelete(run.id, e)}
+                        className="text-zinc-700 hover:text-red-400 transition-all ml-1 opacity-0 group-hover:opacity-100 p-1 rounded-lg hover:bg-red-500/8"
+                        title="Delete"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </motion.div>
                 );
               })}
             </AnimatePresence>
+          </motion.div>
+        )}
+
+        {/* Refresh hint */}
+        {!isLoading && allRuns.length > 0 && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }}
+            className="flex justify-center">
+            <button
+              onClick={() => { void refetch(); void refetchStats(); }}
+              className="flex items-center gap-1.5 text-[11px] text-zinc-600 hover:text-zinc-400 transition-colors px-3 py-1.5 rounded-lg hover:bg-white/4"
+            >
+              <RotateCcw className="w-3 h-3" />
+              Refresh
+            </button>
           </motion.div>
         )}
       </div>

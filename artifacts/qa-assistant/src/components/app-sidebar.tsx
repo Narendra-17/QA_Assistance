@@ -53,40 +53,57 @@ export function AppSidebar() {
   }
 
   return (
-    <Sidebar className="border-r border-white/5" style={{ background: "hsl(230,28%,5.5%)" }}>
-      {/* Logo */}
-      <SidebarHeader className="px-4 py-4 border-b border-white/5">
+    <Sidebar
+      className="border-r border-white/[0.06]"
+      style={{ background: "hsl(230,28%,4.5%)" }}
+    >
+      {/* Logo area */}
+      <SidebarHeader className="px-4 py-4 border-b border-white/[0.06]">
         <Link href="/" className="flex items-center gap-3 group focus-visible:outline-none mb-3">
           <div className="relative shrink-0">
-            <div className="absolute inset-0 bg-violet-500/18 rounded-xl blur-sm transition-all group-hover:blur-md group-hover:bg-violet-500/22" />
-            <div className="relative bg-violet-500/12 p-2 rounded-xl border border-violet-500/22 transition-all group-hover:border-violet-500/40">
+            {/* Outer ambient glow */}
+            <div className="absolute inset-[-4px] bg-violet-500/12 rounded-2xl blur-md transition-all group-hover:bg-violet-500/20 group-hover:blur-lg" />
+            {/* Shield container */}
+            <div className="relative bg-gradient-to-br from-violet-500/20 to-violet-600/10 p-2.5 rounded-xl border border-violet-500/30 transition-all group-hover:border-violet-400/45 group-hover:from-violet-500/25 shield-pulse">
               <ShieldCheck className="text-violet-400" style={{ width: "1.125rem", height: "1.125rem" }} />
             </div>
           </div>
           <div className="flex flex-col min-w-0">
             <span className="font-display font-extrabold text-sm text-white tracking-tight leading-none">
-              QA<span className="text-violet-400">Assistant</span>
+              QA<span className="gradient-text">Assistant</span>
             </span>
-            <span className="text-[10px] text-zinc-600 tracking-widest uppercase mt-0.5">Security Platform</span>
+            <span className="text-[10px] text-zinc-600 tracking-widest uppercase mt-0.5 font-medium">Security Platform</span>
           </div>
         </Link>
 
-        {/* Command palette trigger */}
+        {/* Search / Command palette */}
         <button
           onClick={openPalette}
-          className="flex items-center gap-2 w-full px-3 py-2 rounded-xl bg-white/4 border border-white/8 text-zinc-600 hover:text-zinc-300 hover:border-white/14 hover:bg-white/6 transition-all text-xs group"
+          className="flex items-center gap-2 w-full px-3 py-2 rounded-xl border text-xs group transition-all duration-200"
+          style={{
+            background: "rgba(255,255,255,0.03)",
+            borderColor: "rgba(255,255,255,0.07)",
+          }}
+          onMouseEnter={e => {
+            (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.055)";
+            (e.currentTarget as HTMLElement).style.borderColor = "rgba(139,92,246,0.25)";
+          }}
+          onMouseLeave={e => {
+            (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.03)";
+            (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.07)";
+          }}
         >
-          <Search className="w-3.5 h-3.5 shrink-0" />
+          <Search className="w-3.5 h-3.5 shrink-0 text-zinc-600 group-hover:text-violet-400 transition-colors" />
           <span className="flex-1 text-left text-zinc-600 group-hover:text-zinc-400 transition-colors">Search…</span>
-          <kbd className="text-[9px] font-mono bg-white/6 border border-white/8 rounded px-1 py-0.5 leading-none select-none">⌘K</kbd>
+          <kbd className="text-[9px] font-mono bg-white/5 border border-white/8 rounded px-1.5 py-0.5 leading-none select-none text-zinc-600">⌘K</kbd>
         </button>
       </SidebarHeader>
 
       <SidebarContent className="px-2.5 py-3">
         {/* Main nav */}
         <SidebarGroup>
-          <SidebarGroupLabel className="px-2 mb-1.5 text-[10px] font-bold tracking-widest text-zinc-600 uppercase">
-            Testing
+          <SidebarGroupLabel className="px-2 mb-1.5 text-[9px] font-bold tracking-[0.18em] text-zinc-600 uppercase">
+            Navigation
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu className="space-y-0.5">
@@ -97,23 +114,34 @@ export function AppSidebar() {
                     <SidebarMenuButton asChild isActive={isActive}>
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Link href={item.url} className="focus-visible:outline-none">
+                          <Link href={item.url} className="focus-visible:outline-none block">
                             <div className={[
-                              "flex items-center gap-3 px-2.5 py-2 rounded-xl w-full transition-all duration-150 group",
+                              "relative flex items-center gap-3 px-2.5 py-2 rounded-xl w-full transition-all duration-150 group",
                               isActive
-                                ? "bg-violet-500/10 text-violet-300 border border-violet-500/18"
-                                : "text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent",
-                            ].join(" ")}>
+                                ? "bg-gradient-to-r from-violet-500/14 to-violet-600/5 text-violet-300 border border-violet-500/22"
+                                : "text-zinc-400 hover:text-zinc-200 border border-transparent",
+                            ].join(" ")}
+                            style={!isActive ? {
+                              "--hover-bg": "rgba(255,255,255,0.045)",
+                            } as React.CSSProperties : {}}
+                            onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.045)"; }}
+                            onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = ""; }}
+                            >
+                              {/* Left accent glow for active */}
+                              {isActive && (
+                                <span className="absolute left-0 top-[15%] bottom-[15%] w-[3px] rounded-r-full bg-gradient-to-b from-violet-400 to-violet-600"
+                                  style={{ boxShadow: "0 0 8px rgba(139,92,246,0.9), 0 0 20px rgba(139,92,246,0.3)" }} />
+                              )}
                               <div className={[
                                 "w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200",
                                 isActive
-                                  ? "bg-violet-500/18 shadow-[0_0_10px_rgba(139,92,246,0.25)]"
-                                  : "bg-white/5 group-hover:bg-white/8",
+                                  ? "bg-violet-500/20 shadow-[0_0_12px_rgba(139,92,246,0.3)]"
+                                  : "bg-white/[0.04] group-hover:bg-white/[0.07]",
                               ].join(" ")}>
-                                <item.icon className={`w-3.5 h-3.5 ${isActive ? "text-violet-400" : ""}`} />
+                                <item.icon className={`w-3.5 h-3.5 ${isActive ? "text-violet-400" : "text-zinc-500 group-hover:text-zinc-300 transition-colors"}`} />
                               </div>
-                              <span className="font-medium text-[13px] flex-1">{item.title}</span>
-                              {isActive && <ChevronRight className="w-3 h-3 text-violet-500 ml-auto" />}
+                              <span className={`font-medium text-[13px] flex-1 ${isActive ? "text-violet-200" : ""}`}>{item.title}</span>
+                              {isActive && <ChevronRight className="w-3 h-3 text-violet-500/70 ml-auto shrink-0" />}
                             </div>
                           </Link>
                         </TooltipTrigger>
@@ -128,8 +156,8 @@ export function AppSidebar() {
         </SidebarGroup>
 
         {/* Integrations */}
-        <SidebarGroup>
-          <SidebarGroupLabel className="px-2 mb-1.5 text-[10px] font-bold tracking-widest text-zinc-600 uppercase">
+        <SidebarGroup className="mt-1">
+          <SidebarGroupLabel className="px-2 mb-1.5 text-[9px] font-bold tracking-[0.18em] text-zinc-600 uppercase">
             Integrations
           </SidebarGroupLabel>
           <SidebarGroupContent>
@@ -141,23 +169,30 @@ export function AppSidebar() {
                     <SidebarMenuButton asChild isActive={isActive}>
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Link href={item.url} className="focus-visible:outline-none">
+                          <Link href={item.url} className="focus-visible:outline-none block">
                             <div className={[
-                              "flex items-center gap-3 px-2.5 py-2 rounded-xl w-full transition-all duration-150 group",
+                              "relative flex items-center gap-3 px-2.5 py-2 rounded-xl w-full transition-all duration-150 group",
                               isActive
-                                ? "bg-violet-500/10 text-violet-300 border border-violet-500/18"
-                                : "text-zinc-400 hover:text-zinc-200 hover:bg-white/5 border border-transparent",
-                            ].join(" ")}>
+                                ? "bg-gradient-to-r from-cyan-500/12 to-cyan-600/4 text-cyan-300 border border-cyan-500/20"
+                                : "text-zinc-400 hover:text-zinc-200 border border-transparent",
+                            ].join(" ")}
+                            onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.045)"; }}
+                            onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = ""; }}
+                            >
+                              {isActive && (
+                                <span className="absolute left-0 top-[15%] bottom-[15%] w-[3px] rounded-r-full bg-gradient-to-b from-cyan-400 to-cyan-600"
+                                  style={{ boxShadow: "0 0 8px rgba(6,182,212,0.9), 0 0 20px rgba(6,182,212,0.3)" }} />
+                              )}
                               <div className={[
                                 "w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200",
                                 isActive
-                                  ? "bg-violet-500/18 shadow-[0_0_10px_rgba(139,92,246,0.25)]"
-                                  : "bg-white/5 group-hover:bg-white/8",
+                                  ? "bg-cyan-500/18 shadow-[0_0_12px_rgba(6,182,212,0.25)]"
+                                  : "bg-white/[0.04] group-hover:bg-white/[0.07]",
                               ].join(" ")}>
-                                <item.icon className={`w-3.5 h-3.5 ${isActive ? "text-violet-400" : ""}`} />
+                                <item.icon className={`w-3.5 h-3.5 ${isActive ? "text-cyan-400" : "text-zinc-500 group-hover:text-zinc-300 transition-colors"}`} />
                               </div>
-                              <span className="font-medium text-[13px] flex-1">{item.title}</span>
-                              {isActive && <ChevronRight className="w-3 h-3 text-violet-500 ml-auto" />}
+                              <span className={`font-medium text-[13px] flex-1 ${isActive ? "text-cyan-200" : ""}`}>{item.title}</span>
+                              {isActive && <ChevronRight className="w-3 h-3 text-cyan-500/70 ml-auto shrink-0" />}
                             </div>
                           </Link>
                         </TooltipTrigger>
@@ -173,9 +208,9 @@ export function AppSidebar() {
 
         {/* Recent scans */}
         {recentRuns.length > 0 && (
-          <SidebarGroup>
-            <SidebarGroupLabel className="px-2 mb-1.5 text-[10px] font-bold tracking-widest text-zinc-600 uppercase">
-              Recent
+          <SidebarGroup className="mt-1">
+            <SidebarGroupLabel className="px-2 mb-1.5 text-[9px] font-bold tracking-[0.18em] text-zinc-600 uppercase">
+              Recent Scans
             </SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu className="space-y-0.5">
@@ -189,13 +224,17 @@ export function AppSidebar() {
                       <SidebarMenuButton asChild isActive={isActive}>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <Link href={`/runs/${run.id}`} className="focus-visible:outline-none">
+                            <Link href={`/runs/${run.id}`} className="focus-visible:outline-none block">
                               <div className={[
-                                "flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl w-full transition-all duration-150 group",
+                                "relative flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl w-full transition-all duration-150 group",
                                 isActive
-                                  ? "bg-violet-500/8 text-violet-300 border border-violet-500/14"
-                                  : "text-zinc-500 hover:text-zinc-300 hover:bg-white/4 border border-transparent",
-                              ].join(" ")}>
+                                  ? "text-violet-300 border border-violet-500/16"
+                                  : "text-zinc-500 hover:text-zinc-300 border border-transparent",
+                              ].join(" ")}
+                              style={isActive ? { background: "rgba(139,92,246,0.07)" } : {}}
+                              onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.035)"; }}
+                              onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = ""; }}
+                              >
                                 <div className={[
                                   "w-5 h-5 rounded-md flex items-center justify-center shrink-0 transition-all",
                                   isUrl ? "bg-violet-500/10" : "bg-cyan-500/10",
@@ -224,20 +263,47 @@ export function AppSidebar() {
       </SidebarContent>
 
       {/* User footer */}
-      <SidebarFooter className="px-2.5 py-3 border-t border-white/5">
-        <div className="flex items-center gap-2.5 px-2.5 py-2.5 rounded-xl bg-white/3 border border-white/6 mb-1.5">
-          <Avatar className="h-7 w-7 shrink-0 border border-violet-500/25">
-            <AvatarImage src={user?.profileImageUrl ?? ""} />
-            <AvatarFallback className="bg-violet-500/18 text-violet-300 text-[10px] font-bold">{initials}</AvatarFallback>
-          </Avatar>
-          <div className="flex flex-col min-w-0 flex-1">
+      <SidebarFooter className="px-2.5 py-3 border-t border-white/[0.06]">
+        {/* User card */}
+        <div
+          className="flex items-center gap-2.5 px-2.5 py-2.5 rounded-xl mb-1.5 relative overflow-hidden"
+          style={{
+            background: "linear-gradient(135deg, rgba(139,92,246,0.08), rgba(6,182,212,0.04))",
+            border: "1px solid rgba(139,92,246,0.16)",
+          }}
+        >
+          {/* Subtle background sheen */}
+          <div className="absolute inset-0 opacity-30"
+            style={{ background: "radial-gradient(ellipse at 0% 50%, rgba(139,92,246,0.1), transparent 70%)" }} />
+
+          <div className="relative shrink-0">
+            <Avatar className="h-7 w-7 border border-violet-500/30 shadow-[0_0_8px_rgba(139,92,246,0.2)]">
+              <AvatarImage src={user?.profileImageUrl ?? ""} />
+              <AvatarFallback className="bg-violet-500/20 text-violet-300 text-[10px] font-bold">{initials}</AvatarFallback>
+            </Avatar>
+            {/* Online dot */}
+            <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 border-[1.5px] border-[hsl(230,28%,4.5%)]" />
+          </div>
+          <div className="flex flex-col min-w-0 flex-1 relative">
             <span className="text-[13px] font-semibold text-white truncate leading-none">{displayName}</span>
             <span className="text-[10px] text-zinc-500 truncate mt-0.5">{user?.email ?? "Developer"}</span>
           </div>
         </div>
+
         <button
           onClick={logout}
-          className="flex items-center gap-2 px-2.5 py-2 rounded-xl w-full text-zinc-600 hover:text-red-400 hover:bg-red-500/7 transition-all text-[13px] group"
+          className="flex items-center gap-2 px-2.5 py-2 rounded-xl w-full text-zinc-600 transition-all text-[13px] group"
+          onMouseEnter={e => {
+            (e.currentTarget as HTMLElement).style.color = "rgb(248,113,113)";
+            (e.currentTarget as HTMLElement).style.background = "rgba(239,68,68,0.07)";
+            (e.currentTarget as HTMLElement).style.borderColor = "rgba(239,68,68,0.15)";
+          }}
+          onMouseLeave={e => {
+            (e.currentTarget as HTMLElement).style.color = "";
+            (e.currentTarget as HTMLElement).style.background = "";
+            (e.currentTarget as HTMLElement).style.borderColor = "";
+          }}
+          style={{ border: "1px solid transparent" }}
         >
           <LogOut className="w-3.5 h-3.5 transition-transform group-hover:-translate-x-0.5" />
           Sign Out
