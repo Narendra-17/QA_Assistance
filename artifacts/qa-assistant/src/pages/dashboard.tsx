@@ -8,6 +8,7 @@ import {
   Plus, Trash2, Globe, FileCode2, AlertTriangle, TrendingUp,
   Activity, Loader2, Search, ShieldAlert, CheckCircle2, RotateCcw,
 } from "lucide-react";
+import { usePageTitle } from "@/hooks/use-page-title";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid,
@@ -62,6 +63,34 @@ function useCountUp(target: number, duration = 1100) {
   }, [target, duration]);
 
   return value;
+}
+
+// ── Live elapsed timer ────────────────────────────────────────────────────────
+function useLiveElapsed(startedAt: string, active: boolean) {
+  const [elapsed, setElapsed] = useState("");
+  useEffect(() => {
+    if (!active) { setElapsed(""); return; }
+    function compute() {
+      const secs = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      setElapsed(m > 0 ? `${m}m ${s < 10 ? "0" : ""}${s}s` : `${s}s`);
+    }
+    compute();
+    const t = setInterval(compute, 1000);
+    return () => clearInterval(t);
+  }, [active, startedAt]);
+  return elapsed;
+}
+
+function LiveElapsed({ startedAt }: { startedAt: string }) {
+  const elapsed = useLiveElapsed(startedAt, true);
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-blue-300 font-mono tabular-nums">
+      <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse shrink-0" />
+      {elapsed}
+    </span>
+  );
 }
 
 // ── Score trend chart ─────────────────────────────────────────────────────────
@@ -239,6 +268,7 @@ function OwaspHeatmap({ breakdown }: { breakdown: Array<{ code: string; count: n
 type FilterType = "all" | "url" | "sast";
 
 export default function Dashboard() {
+  usePageTitle("Dashboard");
   const [filter,   setFilter]   = useState<FilterType>("all");
   const [search,   setSearch]   = useState("");
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -541,9 +571,13 @@ export default function Dashboard() {
                             <StatusBadge status={run.status as "pending" | "running" | "completed" | "failed"} />
                           </div>
                           <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                            <span className="text-xs text-zinc-500">
-                              {formatDistanceToNow(new Date(run.createdAt), { addSuffix: true })}
-                            </span>
+                            {isRunning ? (
+                              <LiveElapsed startedAt={run.createdAt} />
+                            ) : (
+                              <span className="text-xs text-zinc-500">
+                                {formatDistanceToNow(new Date(run.createdAt), { addSuffix: true })}
+                              </span>
+                            )}
                             <span className="text-zinc-700">·</span>
                             <span className="text-xs text-zinc-600 capitalize">{isUrl ? "URL Test" : "SAST Scan"}</span>
                             {issueCount !== undefined && (

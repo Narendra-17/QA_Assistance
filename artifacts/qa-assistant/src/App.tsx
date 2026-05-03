@@ -7,8 +7,10 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { CommandPalette } from "@/components/command-palette";
 import { useAuth } from "@workspace/replit-auth-web";
-import { Loader2, AlertTriangle, RefreshCw } from "lucide-react";
+import { Loader2, AlertTriangle, RefreshCw, Keyboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ShortcutsModal } from "@/components/shortcuts-modal";
+import { BackToTop } from "@/components/back-to-top";
 
 const NotFound     = lazy(() => import("@/pages/not-found"));
 const Landing      = lazy(() => import("@/pages/landing"));
@@ -82,9 +84,17 @@ function MainLayout({ children }: { children: React.ReactNode }) {
           >
             <SidebarTrigger className="text-zinc-500 hover:text-zinc-200 transition-colors h-8 w-8" />
             <div className="flex-1" />
+            <button
+              onClick={() => document.dispatchEvent(new CustomEvent("open-shortcuts"))}
+              className="text-zinc-600 hover:text-zinc-300 transition-colors h-8 w-8 flex items-center justify-center rounded-lg hover:bg-white/6"
+              title="Keyboard shortcuts (?)"
+            >
+              <Keyboard className="w-3.5 h-3.5" />
+            </button>
           </header>
           <main className="flex-1 overflow-auto p-5 md:p-7 z-0 relative">
             {children}
+            <BackToTop />
           </main>
         </div>
       </div>
@@ -94,14 +104,20 @@ function MainLayout({ children }: { children: React.ReactNode }) {
 
 function ProtectedRouter() {
   const { isAuthenticated, isLoading } = useAuth();
-  const [paletteOpen, setPaletteOpen]  = useState(false);
+  const [paletteOpen, setPaletteOpen]      = useState(false);
+  const [shortcutsOpen, setShortcutsOpen]  = useState(false);
 
-  // ⌘K / Ctrl+K global shortcut
+  // ⌘K / Ctrl+K + ? global shortcuts
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement)?.tagName;
       if ((e.metaKey || e.ctrlKey) && e.key === "k" && isAuthenticated) {
         e.preventDefault();
         setPaletteOpen(p => !p);
+      }
+      if (e.key === "?" && isAuthenticated && tag !== "INPUT" && tag !== "TEXTAREA") {
+        e.preventDefault();
+        setShortcutsOpen(p => !p);
       }
     }
     document.addEventListener("keydown", onKey);
@@ -113,6 +129,13 @@ function ProtectedRouter() {
     function onOpen() { if (isAuthenticated) setPaletteOpen(true); }
     document.addEventListener("open-command-palette", onOpen);
     return () => document.removeEventListener("open-command-palette", onOpen);
+  }, [isAuthenticated]);
+
+  // Custom event fired by the keyboard shortcuts button in the header
+  useEffect(() => {
+    function onOpen() { if (isAuthenticated) setShortcutsOpen(true); }
+    document.addEventListener("open-shortcuts", onOpen);
+    return () => document.removeEventListener("open-shortcuts", onOpen);
   }, [isAuthenticated]);
 
   if (isLoading) {
@@ -145,6 +168,7 @@ function ProtectedRouter() {
   return (
     <>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       <MainLayout>
         <Suspense fallback={<PageLoader />}>
           <Switch>

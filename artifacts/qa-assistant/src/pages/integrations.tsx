@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { usePageTitle } from "@/hooks/use-page-title";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -336,6 +337,7 @@ function CreateKeyModal({ onClose, onCreate }: { onClose: () => void; onCreate: 
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function Integrations() {
+  usePageTitle("CI/CD Integrations");
   const queryClient = useQueryClient();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newKey, setNewKey] = useState<NewKey | null>(null);

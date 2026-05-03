@@ -3,7 +3,8 @@ import { useLocation, useSearch } from "wouter";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { Globe, FileCode2, Sparkles, Upload, X, Link as LinkIcon, AlertCircle, ShieldCheck } from "lucide-react";
+import { Globe, FileCode2, Sparkles, Upload, X, Link as LinkIcon, AlertCircle, ShieldCheck, Clock } from "lucide-react";
+import { usePageTitle } from "@/hooks/use-page-title";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
@@ -80,6 +81,19 @@ const CODE_TYPES = [
   ".md", ".mdx", ".proto", ".zig", ".lock", ".mod",
 ].join(",");
 
+// ── Recent URLs (localStorage) ────────────────────────────────────────────────
+const RECENT_URLS_KEY = "qa_recent_urls";
+function getRecentUrls(): string[] {
+  try { return JSON.parse(localStorage.getItem(RECENT_URLS_KEY) ?? "[]") as string[]; } catch { return []; }
+}
+function saveRecentUrl(url: string) {
+  const urls = [url, ...getRecentUrls().filter(u => u !== url)].slice(0, 5);
+  localStorage.setItem(RECENT_URLS_KEY, JSON.stringify(urls));
+}
+function removeRecentUrl(url: string) {
+  localStorage.setItem(RECENT_URLS_KEY, JSON.stringify(getRecentUrls().filter(u => u !== url)));
+}
+
 export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "sast" }) {
   const [, setLocation] = useLocation();
   const search = useSearch();
@@ -88,9 +102,12 @@ export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "s
   const prefillDesc = searchParams.get("desc") ?? "";
   const isPrefilledUrl = !!prefillUrl;
 
+  usePageTitle("New Assessment");
   const [tab, setTab] = useState<"url" | "sast">(isPrefilledUrl ? "url" : initialTab);
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [recentUrls, setRecentUrls]   = useState<string[]>([]);
+  const [showRecent, setShowRecent]   = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const urlForm = useForm<UrlForm>({ resolver: zodResolver(urlSchema), defaultValues: { appUrl: prefillUrl, appDescription: prefillDesc } });
@@ -100,6 +117,8 @@ export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "s
     if (prefillUrl) urlForm.setValue("appUrl", prefillUrl, { shouldDirty: false, shouldTouch: false, shouldValidate: true });
     if (prefillDesc) urlForm.setValue("appDescription", prefillDesc, { shouldDirty: false, shouldTouch: false, shouldValidate: true });
   }, [prefillUrl, prefillDesc, urlForm]);
+
+  useEffect(() => { setRecentUrls(getRecentUrls()); }, []);
 
   const descValue = urlForm.watch("appDescription");
   const sastDescValue = sastForm.watch("description");
@@ -119,6 +138,8 @@ export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "s
   });
 
   function onUrlSubmit(values: UrlForm) {
+    saveRecentUrl(values.appUrl);
+    setRecentUrls(getRecentUrls());
     createMutation.mutate({ data: values });
   }
 
@@ -203,7 +224,51 @@ export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "s
                           <div className="relative">
                             <LinkIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
                             <Input placeholder="https://your-app.com" autoFocus
-                              className="pl-10 h-11 bg-white/4 border-white/10 focus-visible:border-violet-500/40 focus-visible:ring-violet-500/15 rounded-xl text-white placeholder:text-zinc-600 text-sm" {...field} />
+                              className="pl-10 h-11 bg-white/4 border-white/10 focus-visible:border-violet-500/40 focus-visible:ring-violet-500/15 rounded-xl text-white placeholder:text-zinc-600 text-sm"
+                              {...field}
+                              onFocus={() => setShowRecent(recentUrls.length > 0)}
+                              onBlur={() => { field.onBlur(); setTimeout(() => setShowRecent(false), 150); }} />
+                            <AnimatePresence>
+                              {showRecent && recentUrls.length > 0 && (
+                                <motion.div
+                                  initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }}
+                                  transition={{ duration: 0.12 }}
+                                  className="absolute top-full left-0 right-0 mt-1 rounded-xl border border-white/10 overflow-hidden shadow-xl z-20"
+                                  style={{ background: "hsl(230,24%,9%)" }}
+                                >
+                                  <div className="px-3 py-1.5 text-[10px] font-bold text-zinc-600 uppercase tracking-widest border-b border-white/6 flex items-center gap-1.5">
+                                    <Clock className="w-3 h-3" />Recent
+                                  </div>
+                                  {recentUrls.map(url => (
+                                    <div key={url} className="flex items-center hover:bg-white/5 group transition-colors">
+                                      <button
+                                        type="button"
+                                        className="flex-1 text-left px-3 py-2.5 text-sm text-zinc-300 hover:text-white transition-colors truncate"
+                                        onMouseDown={() => {
+                                          urlForm.setValue("appUrl", url, { shouldValidate: true });
+                                          setShowRecent(false);
+                                        }}
+                                      >
+                                        {url}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="px-3 py-2.5 text-zinc-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
+                                        onMouseDown={(e) => {
+                                          e.preventDefault();
+                                          removeRecentUrl(url);
+                                          const updated = getRecentUrls();
+                                          setRecentUrls(updated);
+                                          if (updated.length === 0) setShowRecent(false);
+                                        }}
+                                      >
+                                        <X className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
                           </div>
                         </FormControl>
                         <FormMessage className="text-red-400 text-xs" />

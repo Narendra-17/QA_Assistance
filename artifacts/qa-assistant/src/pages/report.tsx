@@ -12,6 +12,7 @@ import { PieChart, Pie, Cell, Tooltip as RechartTooltip, ResponsiveContainer } f
 import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { usePageTitle } from "@/hooks/use-page-title";
 import { toast } from "sonner";
 import { StatusBadge } from "@/components/status-badge";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1270,6 +1271,17 @@ export default function Report() {
     updateStatusMutation.mutate({ index, status });
   }
 
+  // Dynamic page title
+  const pageTitle = useMemo(() => {
+    if (!run) return "Report";
+    const target = run.appUrl ?? run.projectName ?? "Assessment";
+    if (run.status === "completed" && report) return `${target} — ${report.overallScore}/100`;
+    if (run.status === "running" || run.status === "pending") return "Scanning\u2026";
+    if (run.status === "failed") return `Failed \u2014 ${target}`;
+    return target;
+  }, [run, report]);
+  usePageTitle(pageTitle);
+
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
@@ -1587,6 +1599,14 @@ export default function Report() {
                       <X className="w-2.5 h-2.5" />
                     </button>
                   </span>
+                )}
+                {(filterSev !== "all" || filterOwasp || filterStatus !== "all" || !!issueSearch.trim()) && (
+                  <button
+                    onClick={() => { setFilterSev("all"); setFilterOwasp(null); setFilterStatus("all"); setIssueSearch(""); setExpandedIssue(null); }}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border bg-white/5 text-zinc-400 border-white/10 hover:text-white hover:bg-white/10 hover:border-white/18 transition-all"
+                  >
+                    <X className="w-2.5 h-2.5" />Reset
+                  </button>
                 )}
                 <div className="ml-auto flex items-center gap-2 shrink-0">
                   {issues.length > 0 && (
