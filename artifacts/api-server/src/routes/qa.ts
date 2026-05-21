@@ -429,6 +429,14 @@ interface RawIssue {
 /**
  * Post-processing filter: removes or downgrades AI findings that lack sufficient
  * evidence, are pure speculation, or duplicate existing issues.
+ *
+ * Downgrade logic (calibrated to minimize false negatives):
+ * - Only downgrade "theoretical" confidence findings that have NEITHER a code snippet
+ *   NOR a concrete exploit scenario — these are genuinely speculative.
+ * - "confirmed" and "probable" findings with a code snippet or exploit scenario are
+ *   kept at their reported severity so real vulnerabilities are not suppressed.
+ * - Critical findings without any evidence (no snippet, no scenario, theoretical)
+ *   are dropped entirely — these are almost always hallucinations.
  */
 function filterSastIssues(rawIssues: RawIssue[], deterministicTitles: Set<string>): RawIssue[] {
   const seen = new Set<string>();
@@ -438,35 +446,42 @@ function filterSastIssues(rawIssues: RawIssue[], deterministicTitles: Set<string
     const title = String(issue.title ?? "").trim();
     const confidence = String(issue.confidence ?? "confirmed").toLowerCase();
     const severity = String(issue.severity ?? "low").toLowerCase();
-    const snippet = issue.codeSnippet;
+    const snippet = String(issue.codeSnippet ?? "").trim();
     const exploitScenario = String(issue.exploitScenario ?? "").trim();
 
-    // Drop duplicates by title similarity (normalize title for comparison)
+    // Normalize title for deduplication (keep first 40 alphanum chars)
     const titleKey = title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 40);
     if (seen.has(titleKey)) continue;
     seen.add(titleKey);
 
-    // Drop if title overlaps with a deterministic finding
-    const overlapsDeteministic = [...deterministicTitles].some(dt =>
-      dt.toLowerCase().includes(titleKey.slice(0, 20)) ||
-      titleKey.includes(dt.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20))
-    );
+    // Drop if title substantially overlaps with an already-detected deterministic finding
+    const overlapsDeteministic = [...deterministicTitles].some(dt => {
+      const dtKey = dt.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20);
+      return dtKey.length > 4 && (titleKey.includes(dtKey) || dtKey.includes(titleKey.slice(0, 20)));
+    });
     if (overlapsDeteministic) continue;
 
-    // Theoretical findings (confidence === "theoretical") with no code snippet
-    // are downgraded to low — they add noise at high/critical
-    if (confidence === "theoretical" && !snippet) {
-      if (severity === "critical" || severity === "high") {
+    const hasSnippet = snippet.length > 10; // Non-trivial snippet (not just whitespace/null)
+    const hasScenario = exploitScenario.length > 20;
+
+    // Fully theoretical findings (no snippet AND no scenario) at critical/high are
+    // almost always hallucinations — downgrade to medium, not drop, to preserve signal.
+    if (confidence === "theoretical" && !hasSnippet && !hasScenario) {
+      if (severity === "critical") {
+        issue.severity = "high";
+        issue.description = `[Downgraded critical→high: theoretical confidence with no code evidence] ${String(issue.description ?? "")}`;
+      } else if (severity === "high") {
         issue.severity = "medium";
-        issue.description = `[Theoretical — no specific vulnerable code identified] ${String(issue.description ?? "")}`;
+        issue.description = `[Downgraded high→medium: theoretical confidence with no code evidence] ${String(issue.description ?? "")}`;
       }
     }
 
-    // Critical or high findings MUST have a code snippet OR an exploit scenario
-    // If neither is present, downgrade to medium
-    if ((severity === "critical" || severity === "high") && !snippet && !exploitScenario) {
-      issue.severity = "medium";
-      issue.description = `[Downgraded: no specific vulnerable code or exploit path provided] ${String(issue.description ?? "")}`;
+    // "Confirmed" or "probable" findings at high/critical that still lack both a
+    // snippet and a scenario are unusual — flag in description but do NOT downgrade.
+    // This preserves real findings where the model correctly identified a pattern but
+    // the specific line was just outside the truncated file window.
+    if ((severity === "critical" || severity === "high") && !hasSnippet && !hasScenario && confidence !== "theoretical") {
+      issue.description = `[Note: no code snippet or exploit scenario provided — verify manually] ${String(issue.description ?? "")}`;
     }
 
     filtered.push(issue);
@@ -507,8 +522,8 @@ async function analyzeCode(
   ];
 
   const filesSummary = prioritized
-    .slice(0, 25)
-    .map(f => `### ${f.name}\n\`\`\`\n${f.content.slice(0, 5000)}\n\`\`\``)
+    .slice(0, 30)
+    .map(f => `### ${f.name}\n\`\`\`\n${f.content.slice(0, 8000)}\n\`\`\``)
     .join("\n\n");
 
   const fileTypes = [...new Set(files.map(f =>
@@ -521,78 +536,165 @@ async function analyzeCode(
     ? `\nALREADY DETECTED by deterministic scanners — do NOT repeat these:\n${deterministicIssues.map(i => `• ${i.title}`).join("\n")}\n`
     : "";
 
-  const prompt = `You are a senior application security engineer performing SAST (Static Application Security Testing). Your goal is PRECISION over volume — a report with 3 real vulnerabilities is vastly better than one with 10 speculative findings.
+  const prompt = `You are an elite application security engineer performing comprehensive SAST (Static Application Security Testing). Your dual mandate: find EVERY true-positive vulnerability (no misses) while eliminating speculative false positives (no noise).
 
 Project: ${projectName}
 Description: ${description}
 Tech stack detected: ${techStack}
 Files analyzed: ${files.length} (${fileTypes})
 ${alreadyFound}
-
 ${filesSummary}
 
-════════════ STRICT ACCURACY RULES ════════════
-1. CITE THE CODE: Every finding MUST include a "codeSnippet" with the actual vulnerable line(s). If you cannot point to a specific line in the provided code that is vulnerable, do NOT report the issue.
-2. EXPLOIT REQUIRED: Every critical/high finding MUST include an "exploitScenario" — a concrete 1-2 sentence description of exactly how an attacker would exploit this specific code. Generic exploit descriptions are not acceptable.
-3. CONFIDENCE FIELD (required):
-   - "confirmed" — vulnerable code is clearly visible in the provided snippet
-   - "probable" — pattern strongly suggests a vulnerability but full context is missing
-   - "theoretical" — the pattern could be vulnerable depending on code not provided
-4. SEVERITY RULES:
-   - "critical": Directly exploitable with high impact (RCE, SQLi with raw string concat, auth bypass). Must be "confirmed" confidence.
-   - "high": Clear vulnerability, exploitable with moderate effort. Must be "confirmed" or "probable".
-   - "medium": Real weakness, exploitability depends on configuration or context. Any confidence level.
-   - "low": Best-practice gap, defense-in-depth suggestion.
-5. NO MINIMUM COUNT: Do NOT pad the report. If only 2 real issues exist, return 2. Return 0 if the code is clean.
-6. NO DUPLICATE CLASSES: Report a class of vulnerability once (e.g., if multiple files have unparameterized queries, report the worst instance and note it appears in multiple files — don't create one issue per file).
-7. CONTEXT AWARENESS: Consider the full file before flagging. If you see a dangerous function call, check if there is input validation or sanitization earlier in the same file before reporting it.
-════════════════════════════════════════════════
+════════════ ANALYSIS PROTOCOL — apply to every file ════════════
+For each file:
+1. Identify its role: API route / auth middleware / DB layer / template / config / build script / IaC / CI-CD.
+2. Enumerate every user-controlled entry point visible in the file: req.params, req.query, req.body, req.headers, req.files, URL path segments, form inputs, process.argv, environment variables if user-settable.
+3. Trace each entry point forward to sinks (DB call, shell exec, file I/O, HTML output, network request, redirect, crypto operation). At each sink, check whether the input was validated, parameterized, escaped, or sanitized before it arrived.
+4. Check the vulnerability checklist below against the actual code patterns present in the file.
+5. Only report a finding when you can quote the exact vulnerable line verbatim from the provided code.
+════════════════════════════════════════════════════════════════════
 
-Vulnerability checklist by file type (only report if directly observed in the code):
-- Server-side source: SQL injection (raw string concat with user input), command injection (child_process/exec with user input), path traversal (fs operations with user-controlled paths), insecure deserialization, SSRF, XXE, broken auth patterns, missing authorization checks, insecure crypto (MD5/SHA1 for passwords, weak IV, hardcoded keys)
-- Client-side/templates: Unescaped user-controlled values rendered as HTML (innerHTML, dangerouslySetInnerHTML), open redirects with user-controlled URLs
-- Config: debug/development mode in production builds, overly permissive CORS (allow all origins), insecure defaults
-- IaC: public S3 buckets, wildcard IAM permissions, unencrypted storage, exposed management ports
-- Docker/K8s: running as root, privileged containers, secrets in environment variables, no resource limits
-- CI/CD: user-controlled data in shell run steps (script injection), insecure artifact handling
+════════════ COMPREHENSIVE VULNERABILITY CHECKLIST ════════════
+
+── INJECTION ──
+• SQL Injection: raw string interpolation into DB queries — e.g. db.query("SELECT * FROM users WHERE id=" + req.params.id), string concatenation or untagged template literals inside ORM raw() calls. Parameterized queries ($1, ?, :name, prepared statements) are SAFE — do not flag.
+• NoSQL Injection: MongoDB find/findOne/updateOne with { [req.body.field]: value }, $where clause containing user input, passing req.body directly to a query method.
+• Command Injection: child_process.exec/execSync/spawn with shell:true where the command string contains user input via template literal or concatenation; os.system()/subprocess.run(shell=True) with user-controlled string; eval()/new Function()/vm.runInThisContext() with user-controlled content.
+• SSTI (Server-Side Template Injection): template engine render()/renderFile()/compile() called with a user-supplied string as the template (not just a variable inside a fixed template); Jinja2/Nunjucks/Handlebars/Pug template path or source from user input.
+• Log Injection: console.log/logger.info/etc. with raw unsanitized user input that contains newlines (\\n, \\r) — allows log forging or SIEM poisoning.
+• ReDoS: regex with nested quantifiers or alternation ambiguity (.+)+, (a|aa)+, (\\w+)+ etc. applied to user-supplied strings; can cause catastrophic backtracking.
+• LDAP Injection: DN or search filter built by string concat with user input.
+• XPath/XML Injection: XPath query or XML document built from user strings without escaping.
+• Header Injection: HTTP response headers set from user-controlled values without stripping \\r\\n (CRLF injection → cache poisoning, response splitting).
+
+── XSS ──
+• Reflected/Stored XSS (server-rendered): unescaped template variables in HTML output — {{- var}}, <%= var %>, {!! var !!}, res.send("<b>" + userInput + "</b>").
+• DOM XSS: element.innerHTML / outerHTML / document.write / insertAdjacentHTML assigned a user-controlled value; eval() of location.hash or location.search.
+• React XSS: dangerouslySetInnerHTML={{ __html: userControlledValue }} where the value originates from props, state driven by user data, or URL parameters — flag ONLY if the source is clearly user-controlled, not internal app state.
+
+── BROKEN ACCESS CONTROL ──
+• IDOR: DB lookup using req.params.id / req.query.id with no ownership check against the authenticated user (no AND userId = $currentUser or equivalent). Flag only when the ownership check is visibly absent.
+• Missing Auth Middleware: route handler performing privileged data access or mutation with no visible auth check (no req.user / session read / isAuthenticated() / auth middleware applied before the handler).
+• Privilege Escalation: role/isAdmin/permission field read from req.body and used directly in a DB update to the user's own record.
+• Path-Based Authz Bypass: authorization decision made on req.path/req.url before URL decoding, normalization, or path traversal checks.
+
+── AUTHENTICATION & SESSION ──
+• JWT Algorithm Confusion: jwt.verify(token, secret) without explicitly pinning the algorithm in options ({algorithms: ["HS256"]}) — allows alg:none or RS→HS confusion attacks.
+• Weak JWT Secret: hardcoded JWT secret literal, or process.env.JWT_SECRET with a short/obvious fallback string in the source code.
+• Missing JWT Expiry: jwt.decode() used instead of jwt.verify(), or verify() called without clock tolerance and expiry is not re-checked.
+• Session Fixation: session ID not regenerated after successful login (req.session.regenerate() absent after auth succeeds).
+• Insecure Cookie Config: Set-Cookie in code without Secure, HttpOnly, or SameSite attributes on an authentication cookie.
+• Weak Token Generation: Math.random() / Date.now() used to generate tokens, session IDs, OTPs, CSRF tokens, password-reset links, or API keys (not cryptographically secure — use crypto.randomBytes).
+• Timing Attack: secret/password/token compared with == or === instead of crypto.timingSafeEqual() / hmac.compare() / bcrypt.compare().
+
+── CRYPTOGRAPHIC FAILURES ──
+• Weak Password Hashing: MD5/SHA1/SHA256/SHA512 used directly (without bcrypt/argon2/scrypt/pbkdf2) for password storage or verification.
+• Broken Cipher: DES, 3DES, RC4, AES-ECB mode in cipher creation.
+• Static/Zero IV: IV or nonce hardcoded, all-zeros, or derived from a constant (not random per operation).
+• Hardcoded Encryption Key: key material as a string/Buffer literal in source code.
+• Sensitive Data Exposed in Logs/Errors: password, token, secret, private_key, ssn, credit_card_number logged via console.log/logger, or included in a response body returned to the client.
+
+── SERVER-SIDE REQUEST FORGERY (SSRF) ──
+• fetch/axios/request/http.get/https.get called with a URL value derived from req.body / req.query / req.params / req.headers, and no hostname allowlist or URL validation is applied before the call.
+
+── PATH TRAVERSAL ──
+• fs.readFile / fs.writeFile / fs.createReadStream / fs.unlink / open() called with a path that includes user input. path.join() alone does NOT prevent traversal — must also use path.resolve() with a prefix/startsWith check or a strict allowlist.
+• Archive extraction (unzip, tar) without checking entry names for "../" sequences (Zip Slip).
+
+── INSECURE DESERIALIZATION ──
+• Python: pickle.loads() / shelve.open() / marshal.loads() with user-supplied bytes.
+• Python: yaml.load(data) without Loader=yaml.SafeLoader (should be yaml.safe_load()).
+• Node.js: node-serialize / serialize-javascript deserializing untrusted input; JSON.parse on binary/non-JSON formats.
+• Java: ObjectInputStream.readObject() on untrusted network/file input.
+
+── MASS ASSIGNMENT ──
+• ORM create/update called with a spread or direct pass of req.body: User.create(req.body), Model.update({ where: {id} }, req.body), { ...req.body, id } — attacker can set role, isAdmin, balance, or other privileged fields.
+
+── PROTOTYPE POLLUTION ──
+• _.merge / _.extend / $.extend / Object.assign / deepmerge called where the source object originates from req.body or parsed JSON without property filtering — attacker can inject __proto__ or constructor.prototype keys.
+
+── INSECURE FILE HANDLING ──
+• File upload stored in a web-accessible directory; MIME type validated from Content-Type header only (not magic bytes); no file size limit enforced.
+• File download: filename from user input used in Content-Disposition without sanitization (can include path separators or null bytes).
+
+── OPEN REDIRECT ──
+• res.redirect() / window.location.href / location.replace() with a URL value taken directly from req.query / req.body / referrer without an allowlist of trusted domains or a relative-URL-only check.
+
+── RACE CONDITIONS ──
+• Check-then-act without DB-level locking: balance/quota read then updated in two separate queries without SELECT FOR UPDATE, atomic CAS, or DB transaction with appropriate isolation.
+
+── SECURITY MISCONFIGURATION ──
+• CORS: Access-Control-Allow-Origin set to "*" with credentials:true, or reflecting req.headers.origin without an allowlist check.
+• Debug / dev mode active: explicit app.set("env","development"), DEBUG=* or FLASK_DEBUG=True in production config, verbose stack traces sent in the response body.
+• Default credentials or example secrets committed in config files (.env, config.yml, appsettings.json).
+• Overly permissive file permissions set in code (chmod 0777 or equivalent).
+• XXE: XML parser instantiated without disabling DOCTYPE/external entities (FEATURE_DISALLOW_DOCTYPE_DECL not set, resolveExternalEntities not disabled).
+
+── IaC / DOCKER / KUBERNETES ──
+• Public S3 bucket: acl:"public-read-write" or block_public_acls:false without justification.
+• Wildcard IAM: Action:"*" or Resource:"*".
+• Docker: no USER directive (runs as root), --privileged in compose, secrets in ENV instruction.
+• K8s: no securityContext (runAsNonRoot, readOnlyRootFilesystem absent), hostNetwork/hostPID:true, RBAC with wildcard verbs on sensitive resources.
+
+── CI/CD ──
+• GitHub Actions: \${{ github.event.issue.title }}, \${{ github.event.pull_request.body }}, or any user-controlled context interpolated directly into a run: shell step (script injection).
+• Unversioned/mutable action reference: uses: owner/action@main or @master instead of a pinned commit SHA.
+════════════════════════════════════════════════════════════════════
+
+════════════ ACCURACY RULES ════════════
+1. CITE THE CODE: Every finding MUST include "codeSnippet" with the exact vulnerable line(s) copied verbatim from the provided code. No snippet = no finding.
+2. CHECK SANITIZATION FIRST: Before flagging a sink, scan the same file for validation/parameterization/escaping applied to that specific input. If robust protection is present and correctly applied, skip the finding.
+3. CONFIDENCE (required on every issue):
+   - "confirmed" — the vulnerable pattern is unambiguously present; no additional unseen code could fix it
+   - "probable" — the pattern is present but sanitization/auth could exist in an imported module not shown
+   - "theoretical" — the structure suggests a possible vulnerability but confirmation requires runtime or unseen code
+4. SEVERITY CALIBRATION:
+   - "critical": Confirmed RCE, SQLi with direct string concat and no ORM safety, unauthenticated full data exfiltration, auth bypass. Confidence MUST be "confirmed".
+   - "high": Clear exploitable path, moderate attacker effort needed. Confidence "confirmed" or "probable".
+   - "medium": Real weakness that materially increases risk but requires chaining or specific conditions. Any confidence.
+   - "low": Defense-in-depth gap, best-practice deviation, minimal direct exploitability.
+5. ONE FINDING PER VULNERABILITY CLASS: If the same flaw appears in 3 files, report the most severe instance and name the other files in the description — do not create one issue per file.
+6. NO PADDING: Return 0 issues if the code is clean. Never invent findings to fill a report.
+7. EXPLOIT SCENARIO: Required for every critical or high finding. Must reference the specific function name, variable, and file from the code — generic descriptions are rejected.
+════════════════════════════════════════════════════════════════════
 
 Respond with ONLY valid JSON:
 {
-  "summary": "2-3 sentence executive summary. Be honest if the codebase is mostly clean.",
-  "attackChain": "4-6 sentence narrative from attacker perspective using only the confirmed vulnerabilities found. If none are critical/high, note the limited attack surface observed.",
+  "summary": "2-3 sentence executive summary. State the most critical finding first. Be honest if the codebase is largely clean.",
+  "attackChain": "4-6 sentence narrative from attacker perspective using only confirmed/probable vulnerabilities. If no high/critical issues exist, describe the limited attack surface observed.",
   "issues": [
     {
-      "title": "Specific vulnerability title naming the function/pattern",
-      "description": "Explanation of the vulnerability and why the specific code is dangerous",
-      "exploitScenario": "Concrete 1-2 sentence example of how an attacker exploits THIS code",
+      "title": "Specific title naming the vulnerable function/pattern (e.g., 'SQL Injection in getUserById via raw template literal')",
+      "description": "What is wrong, which line/function, why it is dangerous. Reference specific variable names from the code.",
+      "exploitScenario": "For critical/high: exact 1-2 sentence exploit referencing specific function/variable/file. For medium/low: null or brief.",
       "confidence": "confirmed|probable|theoretical",
       "severity": "critical|high|medium|low",
-      "possibleCause": "Root cause",
-      "suggestedFix": "Concrete fix with corrected code example",
-      "codeSnippet": "The exact vulnerable line(s) from the provided files",
-      "filePath": "path/to/file.ext",
+      "possibleCause": "Root cause in one sentence",
+      "suggestedFix": "Concrete corrected code snippet or specific configuration change",
+      "codeSnippet": "Exact vulnerable line(s) verbatim from the provided code",
+      "filePath": "exact/file/name.ext as provided in the file headers above",
       "lineNumber": null,
       "detectionMethod": "ai",
       "owasp": "A03:2021-Injection",
-      "effortLevel": "medium",
-      "effortNote": "Must update all raw query calls in this file"
+      "effortLevel": "low|medium|high",
+      "effortNote": "What specifically needs to change and where"
     }
   ],
   "overallScore": 0,
-  "recommendations": ["Strategic recommendation 1"],
+  "recommendations": ["Prioritized strategic recommendation"],
   "testType": "sast"
 }
 
 OWASP: A01:2021-Broken Access Control | A02:2021-Cryptographic Failures | A03:2021-Injection | A04:2021-Insecure Design | A05:2021-Security Misconfiguration | A06:2021-Vulnerable Components | A07:2021-Identification and Authentication Failures | A08:2021-Software and Data Integrity Failures | A09:2021-Security Logging and Monitoring Failures | A10:2021-Server-Side Request Forgery
 effortLevel: "low" (<2 h), "medium" (half-day–2 days), "high" (multi-day/architectural)
-Set overallScore to 0 — it will be recalculated server-side. Sort by severity descending.`;
+Set overallScore to 0 — it will be recalculated server-side. Sort issues by severity descending (critical first).`;
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
     temperature: 0.1,
-    max_tokens: 4096,
+    max_tokens: 8192,
   });
 
   const aiResult = JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
