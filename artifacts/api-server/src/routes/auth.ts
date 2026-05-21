@@ -14,7 +14,12 @@ import {
   type SessionData,
 } from "../lib/auth";
 import { GetCurrentAuthUserResponse } from "@workspace/api-zod";
-import { logSecurityEvent } from "../lib/security";
+import {
+  logSecurityEvent,
+  isLoginAllowed,
+  recordLoginFailure,
+  clearLoginFailures,
+} from "../lib/security";
 
 const router: IRouter = Router();
 
@@ -128,6 +133,14 @@ router.post("/auth/login", async (req: Request, res: Response) => {
 
   const { email, password } = parsed.data;
 
+  // Account-level lockout check — complements the IP-based rate limiter.
+  // An attacker using multiple IPs can still be blocked per-account.
+  if (!isLoginAllowed(email)) {
+    logSecurityEvent("LOGIN_LOCKED", req, `account locked: ${email}`);
+    res.status(429).json({ error: "Too many failed attempts for this account. Please wait 15 minutes." });
+    return;
+  }
+
   const [user] = await db
     .select()
     .from(usersTable)
@@ -138,10 +151,15 @@ router.post("/auth/login", async (req: Request, res: Response) => {
   const valid = await verifyPassword(password, hash);
 
   if (!user || !valid || !user.passwordHash) {
+    recordLoginFailure(email);
     logSecurityEvent("AUTH_FAILED", req, `failed login for ${email}`);
     res.status(401).json({ error: "Invalid email or password." });
     return;
   }
+
+  // Clear failure counter so legitimate users are never locked out by past mistakes
+  clearLoginFailures(email);
+  logSecurityEvent("AUTH_SUCCESS", req, `user ${user.id}`);
 
   const sessionData: SessionData = {
     user: {

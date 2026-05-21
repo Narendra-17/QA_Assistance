@@ -193,11 +193,30 @@ app.post("/api/qa/runs/:id/generate-fix", fixLimiter);
 // API responses may contain sensitive user data.  Ensure no intermediate proxy
 // or browser cache stores them.  Applied only to /api/* to avoid interfering
 // with static assets served by other middleware if any are added later.
+// Vary: Cookie ensures that even a misconfigured shared cache never serves one
+// user's session-scoped response to a different user.
 app.use("/api", (_req: Request, res: Response, next: NextFunction) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Pragma", "no-cache");
+  res.setHeader("Vary", "Cookie");
   next();
 });
+
+// ── Public share-link rate limiter ────────────────────────────────────────────
+// The /api/qa/share/:token endpoint is fully unauthenticated and therefore
+// needs its own tighter limit so automated token-scanning is impractical.
+// UUID tokens are 128-bit random so enumeration is computationally infeasible,
+// but the limiter provides defence-in-depth at zero cost.
+const shareLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req: Request, res: Response) => {
+    res.status(429).json({ error: "Too many requests. Please wait a moment." });
+  },
+});
+app.get("/api/qa/share/:token", shareLimiter);
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use("/api", router);

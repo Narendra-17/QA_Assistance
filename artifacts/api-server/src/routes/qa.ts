@@ -1256,6 +1256,13 @@ router.post("/runs/:id/generate-fix", async (req: Request, res: Response) => {
   const fixController = new AbortController();
   const fixTimeout = setTimeout(() => fixController.abort(), 30_000);
 
+  // Safely truncate LLM-stored fields before re-embedding them in a new prompt.
+  // This prevents indirect prompt injection: a malicious user could have submitted
+  // code containing injection comments during SAST analysis, which then get stored
+  // in the issue fields and re-injected here.  Enforcing strict length limits and
+  // wrapping values in labelled delimiters bounds the injection surface.
+  const ft = (v: unknown, max: number) => String(v ?? "").slice(0, max);
+
   try {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
@@ -1263,15 +1270,18 @@ router.post("/runs/:id/generate-fix", async (req: Request, res: Response) => {
         role: "user",
         content: `You are a senior security engineer. Generate a precise, production-ready code fix for this vulnerability.
 
-Issue: ${String(issue.title ?? "")}
-Severity: ${String(issue.severity ?? "")}
-Description: ${String(issue.description ?? "")}
-Root Cause: ${String(issue.possibleCause ?? "")}
-Suggested Fix Direction: ${String(issue.suggestedFix ?? "")}
-${issue.filePath ? `File: ${String(issue.filePath)}` : ""}
-${issue.codeSnippet ? `Vulnerable code:\n\`\`\`\n${String(issue.codeSnippet)}\n\`\`\`` : ""}
-Scan type: ${run.runType === "sast" ? "Source code (SAST)" : "Live URL (DAST)"}
-${run.appUrl ? `URL: ${run.appUrl}` : ""}
+[ISSUE_TITLE]: ${ft(issue.title, 200)}
+[SEVERITY]: ${ft(issue.severity, 20)}
+[DESCRIPTION]: ${ft(issue.description, 600)}
+[ROOT_CAUSE]: ${ft(issue.possibleCause, 300)}
+[FIX_DIRECTION]: ${ft(issue.suggestedFix, 500)}
+[FILE]: ${ft(issue.filePath, 200)}
+[VULNERABLE_CODE]:
+\`\`\`
+${ft(issue.codeSnippet, 800)}
+\`\`\`
+[SCAN_TYPE]: ${run.runType === "sast" ? "Source code (SAST)" : "Live URL (DAST)"}
+[URL]: ${ft(run.appUrl, 200)}
 
 Generate a complete, ready-to-paste fix. Include imports if needed. Fix the exact vulnerability — don't just add a comment.
 

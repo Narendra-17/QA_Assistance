@@ -237,11 +237,81 @@ export type SecurityEvent =
   | "AUTH_MISSING"
   | "AUTH_INVALID"
   | "AUTH_FAILED"
+  | "AUTH_SUCCESS"
+  | "LOGIN_LOCKED"
   | "SSRF_BLOCKED"
   | "INPUT_REJECTED"
   | "FILE_REJECTED"
   | "RATE_LIMITED"
   | "INVALID_PARAM";
+
+// ─── Account-level brute-force protection ────────────────────────────────────
+//
+// Tracks failed login attempts per normalised email address in memory.
+// Complements the IP-based rate limiter: even with multiple IPs an attacker
+// cannot exceed MAX_ACCOUNT_FAILURES attempts against a single account within
+// the lockout window.
+//
+// Trade-off: in-memory only, so resets on server restart.  For this
+// application that is an acceptable trade-off; a production system with
+// horizontal scaling would use Redis.
+
+const MAX_ACCOUNT_FAILURES = 10;
+const ACCOUNT_LOCKOUT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const MAX_TRACKER_ENTRIES = 10_000;
+
+interface FailureRecord {
+  count: number;
+  firstAttempt: number;
+}
+
+const loginFailureTracker = new Map<string, FailureRecord>();
+
+/** Remove stale entries to prevent unbounded memory growth. */
+function pruneLoginTracker(): void {
+  if (loginFailureTracker.size < MAX_TRACKER_ENTRIES) return;
+  const cutoff = Date.now() - ACCOUNT_LOCKOUT_WINDOW_MS;
+  for (const [key, rec] of loginFailureTracker) {
+    if (rec.firstAttempt < cutoff) loginFailureTracker.delete(key);
+  }
+}
+
+/**
+ * Returns true if a login attempt for this email is currently permitted.
+ * Automatically expires the record once the lockout window passes.
+ */
+export function isLoginAllowed(email: string): boolean {
+  pruneLoginTracker();
+  const rec = loginFailureTracker.get(email);
+  if (!rec) return true;
+  if (Date.now() - rec.firstAttempt > ACCOUNT_LOCKOUT_WINDOW_MS) {
+    loginFailureTracker.delete(email);
+    return true;
+  }
+  return rec.count < MAX_ACCOUNT_FAILURES;
+}
+
+/**
+ * Increments the failure counter for this email after a bad credential attempt.
+ * Call ONLY after confirming that the credentials were wrong.
+ */
+export function recordLoginFailure(email: string): void {
+  pruneLoginTracker();
+  const rec = loginFailureTracker.get(email);
+  if (!rec) {
+    loginFailureTracker.set(email, { count: 1, firstAttempt: Date.now() });
+  } else {
+    rec.count++;
+  }
+}
+
+/**
+ * Clears the failure counter for this email after a successful login,
+ * so a legitimate user is never locked out by their own past mistakes.
+ */
+export function clearLoginFailures(email: string): void {
+  loginFailureTracker.delete(email);
+}
 
 export function logSecurityEvent(
   event: SecurityEvent,
