@@ -173,8 +173,10 @@ function IntelligencePanel({ report, issues, activeOwasp, onOwaspFilter }: {
 
   return (
     <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-      className="rounded-2xl border border-white/8 overflow-hidden"
+      className="relative rounded-2xl border border-white/8 overflow-hidden"
       style={{ background: "linear-gradient(145deg, hsl(230,22%,7%), hsl(230,22%,6%))" }}>
+      <div className="absolute top-0 inset-x-0 h-px"
+        style={{ background: "linear-gradient(90deg, transparent, rgba(139,92,246,0.5), rgba(6,182,212,0.3), transparent)" }} />
       {/* Header */}
       <button
         className="w-full flex items-center gap-3 px-5 py-4 hover:bg-white/2 transition-colors"
@@ -1285,21 +1287,32 @@ export default function Report() {
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
-        <div className="w-14 h-14 rounded-2xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
-          <Loader2 className="w-7 h-7 text-violet-400 animate-spin" />
+        <div className="relative">
+          <div className="absolute inset-0 bg-violet-500/25 rounded-2xl blur-xl animate-pulse" />
+          <div className="relative w-14 h-14 rounded-2xl bg-violet-500/15 border border-violet-500/25 flex items-center justify-center">
+            <Loader2 className="w-7 h-7 text-violet-400 animate-spin" />
+          </div>
         </div>
-        <p className="text-zinc-400 text-sm">Loading report…</p>
+        <p className="text-zinc-400 text-sm font-medium">Loading report…</p>
       </div>
     );
   }
 
   if (!run) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
-        <XCircle className="w-12 h-12 text-red-400" />
-        <p className="text-zinc-300 font-semibold">Run not found</p>
-        <Button asChild variant="outline" className="border-white/10 text-white rounded-xl">
-          <Link href="/"><ArrowLeft className="w-4 h-4 mr-1.5" />Back to Dashboard</Link>
+      <div className="flex flex-col items-center justify-center min-h-[400px] gap-5">
+        <div className="relative">
+          <div className="absolute inset-0 bg-red-500/20 rounded-2xl blur-xl" />
+          <div className="relative w-14 h-14 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+            <XCircle className="w-7 h-7 text-red-400" />
+          </div>
+        </div>
+        <div className="text-center">
+          <p className="text-zinc-200 font-semibold mb-1">Run not found</p>
+          <p className="text-zinc-500 text-sm">This report doesn't exist or you don't have access.</p>
+        </div>
+        <Button asChild variant="outline" className="border-white/10 bg-white/4 hover:bg-white/8 text-white rounded-xl gap-1.5">
+          <Link href="/"><ArrowLeft className="w-4 h-4" />Back to Dashboard</Link>
         </Button>
       </div>
     );
@@ -1327,16 +1340,29 @@ export default function Report() {
               <Link href="/"><ArrowLeft className="w-3.5 h-3.5" />Dashboard</Link>
             </Button>
             <div className="flex items-center gap-3 flex-wrap">
-              <div className={["w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
+              <div className={["relative w-9 h-9 rounded-xl flex items-center justify-center shrink-0",
                 isUrl ? "bg-violet-500/14 border border-violet-500/22" : "bg-cyan-500/14 border border-cyan-500/22"].join(" ")}>
-                {isUrl ? <Globe className="w-4 h-4 text-violet-400" /> : <FileCode2 className="w-4 h-4 text-cyan-400" />}
+                <div className={["absolute inset-0 rounded-xl blur-md opacity-40",
+                  isUrl ? "bg-violet-500/30" : "bg-cyan-500/30"].join(" ")} />
+                {isUrl
+                  ? <Globe className="relative w-4.5 h-4.5 text-violet-400" />
+                  : <FileCode2 className="relative w-4.5 h-4.5 text-cyan-400" />}
               </div>
               <div>
-                <h1 className="text-lg font-display font-bold text-white leading-tight max-w-lg truncate">
-                  {run.appUrl ?? run.projectName ?? "Assessment"}
-                </h1>
-                <p className="text-zinc-500 text-xs mt-0.5">
-                  {format(new Date(run.createdAt), "MMM d, yyyy · h:mm a")} · {isUrl ? "URL Test" : "SAST Scan"}
+                <div className="flex items-center gap-2 mb-0.5">
+                  <h1 className="text-lg font-display font-bold text-white leading-tight max-w-lg truncate">
+                    {run.appUrl ?? run.projectName ?? "Assessment"}
+                  </h1>
+                  <span className={["hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border",
+                    isUrl
+                      ? "bg-violet-500/10 border-violet-500/25 text-violet-300"
+                      : "bg-cyan-500/10 border-cyan-500/25 text-cyan-300"
+                  ].join(" ")}>
+                    {isUrl ? "DAST" : "SAST"}
+                  </span>
+                </div>
+                <p className="text-zinc-500 text-xs">
+                  {format(new Date(run.createdAt), "MMM d, yyyy · h:mm a")} · {isUrl ? "URL Test" : "Static Code Scan"}
                   {run.status === "completed" && ` · Updated ${formatDistanceToNow(new Date(run.updatedAt), { addSuffix: true })}`}
                 </p>
               </div>
@@ -1394,16 +1420,25 @@ export default function Report() {
 
         {/* Error state */}
         {run.status === "failed" && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-            className="p-5 rounded-2xl border border-red-500/18 bg-red-500/5 flex items-start gap-3">
-            <XCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
-            <div>
-              <p className="text-red-300 font-semibold text-sm">Analysis failed</p>
-              <p className="text-zinc-400 text-sm mt-1">{run.errorMessage ?? "An unexpected error occurred during analysis."}</p>
-              <Button size="sm" onClick={handleRerun} variant="outline"
-                className="mt-3 border-red-500/20 text-red-300 hover:bg-red-500/10 rounded-xl h-8 gap-1.5">
-                <RotateCcw className="w-3.5 h-3.5" />Try again
-              </Button>
+          <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+            className="relative rounded-2xl border border-red-500/20 overflow-hidden"
+            style={{ background: "linear-gradient(135deg, rgba(239,68,68,0.06), rgba(239,68,68,0.03))" }}>
+            <div className="absolute top-0 inset-x-0 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(239,68,68,0.6), transparent)" }} />
+            <div className="p-5 flex items-start gap-3">
+              <div className="relative shrink-0 mt-0.5">
+                <div className="absolute inset-0 bg-red-500/30 rounded-xl blur-md" />
+                <div className="relative w-9 h-9 rounded-xl bg-red-500/12 border border-red-500/22 flex items-center justify-center">
+                  <XCircle className="w-4.5 h-4.5 text-red-400" />
+                </div>
+              </div>
+              <div className="flex-1">
+                <p className="text-red-300 font-semibold text-sm mb-1">Analysis failed</p>
+                <p className="text-zinc-400 text-sm leading-relaxed">{run.errorMessage ?? "An unexpected error occurred during analysis."}</p>
+                <Button size="sm" onClick={handleRerun} variant="outline"
+                  className="mt-3 border-red-500/25 bg-red-500/5 hover:bg-red-500/12 text-red-300 hover:text-red-200 rounded-xl h-8 gap-1.5">
+                  <RotateCcw className="w-3.5 h-3.5" />Try again
+                </Button>
+              </div>
             </div>
           </motion.div>
         )}
@@ -1412,8 +1447,13 @@ export default function Report() {
         {run.status === "completed" && report && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-5">
             {/* Score + Summary */}
-            <div className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-4">
-              <div className="flex flex-col items-center justify-center p-6 rounded-2xl border border-white/7 bg-white/2">
+            <div className="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-4">
+              <div className="relative flex flex-col items-center justify-center p-6 rounded-2xl border border-white/8 overflow-hidden"
+                style={{ background: "linear-gradient(145deg, hsl(230,22%,8%), hsl(230,22%,6%))" }}>
+                <div className="absolute top-0 inset-x-0 h-px"
+                  style={{ background: `linear-gradient(90deg, transparent, ${report.overallScore >= 80 ? "rgba(16,185,129,0.7)" : report.overallScore >= 60 ? "rgba(245,158,11,0.7)" : "rgba(239,68,68,0.7)"}, transparent)` }} />
+                <div className="absolute inset-0 opacity-20 pointer-events-none"
+                  style={{ background: `radial-gradient(ellipse at 50% 50%, ${report.overallScore >= 80 ? "rgba(16,185,129,0.15)" : report.overallScore >= 60 ? "rgba(245,158,11,0.12)" : "rgba(239,68,68,0.12)"} 0%, transparent 70%)` }} />
                 <ScoreGauge score={report.overallScore} />
                 {sameTargetHistory.length > 0 && (() => {
                   const prev  = sameTargetHistory[sameTargetHistory.length - 1].score;
@@ -1428,9 +1468,14 @@ export default function Report() {
                   );
                 })()}
               </div>
-              <div className="flex flex-col gap-4 p-6 rounded-2xl border border-white/7 bg-white/2">
+              <div className="relative flex flex-col gap-4 p-6 rounded-2xl border border-white/8 overflow-hidden"
+                style={{ background: "linear-gradient(145deg, hsl(230,22%,8%), hsl(230,22%,6%))" }}>
+                <div className="absolute top-0 inset-x-0 h-px"
+                  style={{ background: "linear-gradient(90deg, transparent, rgba(139,92,246,0.55), rgba(6,182,212,0.3), transparent)" }} />
                 <div>
-                  <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">Executive Summary</p>
+                  <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                    <FileText className="w-3 h-3 text-violet-400" />Executive Summary
+                  </p>
                   <p className="text-zinc-300 leading-relaxed text-sm">{report.summary}</p>
                 </div>
                 <SeverityBar issues={report.issues} />
@@ -1491,37 +1536,60 @@ export default function Report() {
             {/* Deterministic findings banner */}
             {report.deterministicFindings && (report.deterministicFindings.secretsFound > 0 || report.deterministicFindings.vulnerableDepsFound > 0) && (
               <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
-                className="p-4 rounded-2xl border border-red-500/20 bg-red-500/5 flex items-start gap-3">
-                <Zap className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
-                <div className="text-sm">
-                  <span className="text-red-300 font-semibold">Deterministic scanner active · </span>
-                  <span className="text-red-200">
-                    {report.deterministicFindings.secretsFound > 0 &&
-                      `${report.deterministicFindings.secretsFound} hardcoded secret${report.deterministicFindings.secretsFound > 1 ? "s" : ""} detected`}
-                    {report.deterministicFindings.secretsFound > 0 && report.deterministicFindings.vulnerableDepsFound > 0 && " · "}
-                    {report.deterministicFindings.vulnerableDepsFound > 0 &&
-                      `${report.deterministicFindings.vulnerableDepsFound} vulnerable dependenc${report.deterministicFindings.vulnerableDepsFound > 1 ? "ies" : "y"} found via OSV.dev`}
-                  </span>
-                  <span className="text-red-400/70 text-xs block mt-1">These findings are 100% accurate — not AI-generated.</span>
+                className="relative rounded-2xl border border-red-500/22 overflow-hidden"
+                style={{ background: "linear-gradient(135deg, rgba(239,68,68,0.08), rgba(239,68,68,0.04))" }}>
+                <div className="absolute top-0 inset-x-0 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(239,68,68,0.7), transparent)" }} />
+                <div className="p-4 flex items-start gap-3">
+                  <div className="relative shrink-0 mt-0.5">
+                    <div className="absolute inset-0 bg-red-500/25 rounded-lg blur-md" />
+                    <div className="relative w-8 h-8 rounded-lg bg-red-500/15 border border-red-500/25 flex items-center justify-center">
+                      <Zap className="w-4 h-4 text-red-400" />
+                    </div>
+                  </div>
+                  <div className="text-sm">
+                    <span className="text-red-300 font-bold">Deterministic Scanner · </span>
+                    <span className="text-red-200">
+                      {report.deterministicFindings.secretsFound > 0 &&
+                        `${report.deterministicFindings.secretsFound} hardcoded secret${report.deterministicFindings.secretsFound > 1 ? "s" : ""} detected`}
+                      {report.deterministicFindings.secretsFound > 0 && report.deterministicFindings.vulnerableDepsFound > 0 && " · "}
+                      {report.deterministicFindings.vulnerableDepsFound > 0 &&
+                        `${report.deterministicFindings.vulnerableDepsFound} vulnerable dependenc${report.deterministicFindings.vulnerableDepsFound > 1 ? "ies" : "y"} found via OSV.dev`}
+                    </span>
+                    <span className="text-red-400/70 text-xs flex items-center gap-1 mt-1.5">
+                      <CheckCircle2 className="w-3 h-3 text-red-400/70" />100% accurate — not AI-generated
+                    </span>
+                  </div>
                 </div>
               </motion.div>
             )}
 
             {/* Recommendations */}
             {report.recommendations.length > 0 && (
-              <div className="p-5 rounded-2xl border border-white/7 bg-white/2">
-                <div className="flex items-center gap-2 mb-4">
-                  <TrendingUp className="w-4 h-4 text-emerald-400" />
-                  <p className="text-sm font-semibold text-white">Strategic Recommendations</p>
+              <div className="relative rounded-2xl border border-white/8 overflow-hidden"
+                style={{ background: "linear-gradient(145deg, hsl(230,22%,8%), hsl(230,22%,6%))" }}>
+                <div className="absolute top-0 inset-x-0 h-px"
+                  style={{ background: "linear-gradient(90deg, transparent, rgba(16,185,129,0.55), rgba(6,182,212,0.2), transparent)" }} />
+                <div className="p-5">
+                  <div className="flex items-center gap-2.5 mb-4">
+                    <div className="w-7 h-7 rounded-lg bg-emerald-500/12 border border-emerald-500/20 flex items-center justify-center">
+                      <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+                    </div>
+                    <p className="text-sm font-semibold text-white">Strategic Recommendations</p>
+                    <span className="ml-auto text-[10px] text-zinc-600 bg-white/4 border border-white/8 px-2 py-0.5 rounded-full">
+                      {report.recommendations.length} action{report.recommendations.length !== 1 ? "s" : ""}
+                    </span>
+                  </div>
+                  <ol className="space-y-2.5">
+                    {report.recommendations.map((rec, i) => (
+                      <motion.li key={i} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: i * 0.05 }}
+                        className="flex items-start gap-3 text-sm text-zinc-300 p-3 rounded-xl bg-white/[0.025] border border-white/6 hover:bg-white/[0.04] hover:border-white/10 transition-all">
+                        <span className="w-5 h-5 rounded-md bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 text-[10px] flex items-center justify-center shrink-0 mt-0.5 font-black">{i + 1}</span>
+                        {rec}
+                      </motion.li>
+                    ))}
+                  </ol>
                 </div>
-                <ol className="space-y-2">
-                  {report.recommendations.map((rec, i) => (
-                    <li key={i} className="flex items-start gap-3 text-sm text-zinc-300">
-                      <span className="w-5 h-5 rounded-md bg-emerald-500/12 border border-emerald-500/18 text-emerald-400 text-[10px] flex items-center justify-center shrink-0 mt-0.5 font-bold">{i + 1}</span>
-                      {rec}
-                    </li>
-                  ))}
-                </ol>
               </div>
             )}
 
@@ -1653,15 +1721,40 @@ export default function Report() {
             {/* Issues */}
             <div className="space-y-2">
               {issues.length === 0 ? (
-                <div className="text-center py-12 rounded-2xl border border-white/7 bg-white/2">
-                  <CheckCircle2 className="w-9 h-9 text-emerald-400 mx-auto mb-3" />
-                  <h3 className="font-semibold text-white text-sm mb-1">
+                <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+                  className="relative text-center py-14 rounded-2xl border overflow-hidden"
+                  style={filterSev === "all" && !filterOwasp && filterStatus === "all"
+                    ? { background: "linear-gradient(145deg, rgba(16,185,129,0.05), rgba(16,185,129,0.02))", borderColor: "rgba(16,185,129,0.18)" }
+                    : { background: "hsl(230,22%,7%)", borderColor: "rgba(255,255,255,0.07)" }}>
+                  {filterSev === "all" && !filterOwasp && filterStatus === "all" && (
+                    <div className="absolute top-0 inset-x-0 h-px"
+                      style={{ background: "linear-gradient(90deg, transparent, rgba(16,185,129,0.6), transparent)" }} />
+                  )}
+                  <div className="relative inline-flex mb-4">
+                    <div className={["absolute inset-0 rounded-2xl blur-xl opacity-50",
+                      filterSev === "all" && !filterOwasp && filterStatus === "all" ? "bg-emerald-500/20" : "bg-zinc-500/10"
+                    ].join(" ")} />
+                    <div className={["relative w-14 h-14 rounded-2xl flex items-center justify-center border",
+                      filterSev === "all" && !filterOwasp && filterStatus === "all"
+                        ? "bg-emerald-500/10 border-emerald-500/20"
+                        : "bg-white/4 border-white/8"
+                    ].join(" ")}>
+                      {filterSev === "all" && !filterOwasp && filterStatus === "all"
+                        ? <CheckCircle2 className="w-7 h-7 text-emerald-400" />
+                        : <Search className="w-7 h-7 text-zinc-500" />}
+                    </div>
+                  </div>
+                  <h3 className={["font-display font-bold text-base mb-1.5",
+                    filterSev === "all" && !filterOwasp && filterStatus === "all" ? "text-emerald-300" : "text-white"
+                  ].join(" ")}>
                     {filterSev === "all" && !filterOwasp && filterStatus === "all" ? "No issues found!" : "No matching issues"}
                   </h3>
-                  <p className="text-zinc-500 text-xs">
-                    {filterSev === "all" && !filterOwasp && filterStatus === "all" ? "Clean analysis — no issues detected." : "Try adjusting your filters."}
+                  <p className="text-zinc-500 text-sm max-w-xs mx-auto">
+                    {filterSev === "all" && !filterOwasp && filterStatus === "all"
+                      ? "Clean analysis — this target looks secure based on available checks."
+                      : "Try adjusting your severity, OWASP, or status filters."}
                   </p>
-                </div>
+                </motion.div>
               ) : (
                 <AnimatePresence>
                   {issues.map((issue, displayIdx) => {
@@ -1678,8 +1771,18 @@ export default function Report() {
                         data-issue-idx={displayIdx}
                         initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: displayIdx * 0.03 }}
-                        className={["rounded-2xl border overflow-hidden transition-opacity", isResolved ? "opacity-50" : ""].join(" ")}
-                        style={{ background: cfg.bg, borderColor: cfg.border }}>
+                        whileHover={{ y: -1, transition: { duration: 0.15 } }}
+                        className={["group relative rounded-2xl border overflow-hidden transition-all", isResolved ? "opacity-45" : ""].join(" ")}
+                        style={{
+                          background: cfg.bg,
+                          borderColor: cfg.border,
+                          boxShadow: `0 0 0 0 ${cfg.color}00`,
+                        }}
+                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.boxShadow = `0 4px 24px ${cfg.color}18`; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = "none"; }}>
+                        {/* Left severity accent bar */}
+                        <div className="absolute top-0 left-0 bottom-0 w-0.5 rounded-l"
+                          style={{ background: `linear-gradient(to bottom, ${cfg.color}80, ${cfg.color}20)` }} />
                         <button
                           className="w-full text-left flex items-start gap-3 p-4 hover:bg-white/3 transition-colors"
                           onClick={() => setExpandedIssue(isExpanded ? null : displayIdx)}>

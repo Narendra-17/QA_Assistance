@@ -1131,10 +1131,12 @@ router.post("/runs/:id/generate-fix", async (req: Request, res: Response) => {
   const id = String(req.params.id);
   if (!isValidUuid(id)) return void res.status(400).json({ error: "Invalid run ID format" });
 
-  const { issueIndex } = req.body as { issueIndex: number };
-  if (typeof issueIndex !== "number" || issueIndex < 0 || issueIndex > 9999) {
+  const fixBodySchema = z.object({ issueIndex: z.number().int().min(0).max(9999) });
+  const fixBodyParsed = fixBodySchema.safeParse(req.body);
+  if (!fixBodyParsed.success) {
     return void res.status(400).json({ error: "Invalid issue index" });
   }
+  const { issueIndex } = fixBodyParsed.data;
 
   const userId = (req.user as { id: string }).id;
   const [run] = await db.select().from(qaRunsTable)
