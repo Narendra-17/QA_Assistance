@@ -46,8 +46,12 @@ export default function Register() {
       setError("Passwords do not match.");
       return;
     }
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
+    if (password.length < 12) {
+      setError("Password must be at least 12 characters.");
+      return;
+    }
+    if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*[\d!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?`~])/.test(password)) {
+      setError("Password must contain uppercase, lowercase, and a number or special character.");
       return;
     }
 
@@ -73,9 +77,19 @@ export default function Register() {
   }
 
   const passwordsMatch = confirm === "" || password === confirm;
-  const pwStrength = password.length === 0 ? 0 : password.length < 8 ? 1 : password.length < 12 ? 2 : 3;
-  const pwStrengthColor = ["", "#EF4444", "#F59E0B", "#10B981"][pwStrength];
-  const pwStrengthLabel = ["", "Too short", "Good", "Strong"][pwStrength];
+
+  // Strength scoring: 0=empty 1=too short 2=length ok but weak 3=good 4=strong
+  const hasUpper = /[A-Z]/.test(password);
+  const hasLower = /[a-z]/.test(password);
+  const hasNumOrSpecial = /[\d!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?`~]/.test(password);
+  const pwStrength =
+    password.length === 0 ? 0
+    : password.length < 12 ? 1
+    : (!hasUpper || !hasLower || !hasNumOrSpecial) ? 2
+    : password.length < 16 ? 3
+    : 4;
+  const pwStrengthColor = ["", "#EF4444", "#F59E0B", "#F59E0B", "#10B981"][pwStrength];
+  const pwStrengthLabel = ["", "Too short", "Needs complexity", "Good", "Strong"][pwStrength];
 
   function focusBoxShadow(focused: boolean, error = false) {
     if (error) return "0 0 0 1px rgba(239,68,68,0.4), 0 4px 20px rgba(239,68,68,0.06)";
@@ -193,7 +207,7 @@ export default function Register() {
                   onChange={e => setPassword(e.target.value)}
                   onFocus={() => setPwFocused(true)}
                   onBlur={() => setPwFocused(false)}
-                  placeholder="Min. 8 characters"
+                  placeholder="Min. 12 chars, uppercase + number"
                   className="w-full pl-11 pr-11 py-3 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white placeholder-zinc-600 text-sm focus:outline-none focus:border-violet-500/50 focus:bg-white/[0.06] transition-all"
                 />
                 <button type="button" onClick={() => setShowPw(v => !v)}

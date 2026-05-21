@@ -43,12 +43,26 @@ app.use(
     ieNoOpen: true,
     // Disable XSS filter (modern browsers ignore it, and it can introduce bugs)
     xssFilter: false,
+    // Restrict cross-origin window access (prevents cross-origin script attacks)
+    crossOriginOpenerPolicy: { policy: "same-origin" },
+    // CORP: same-origin for API — resources cannot be loaded by cross-origin pages
+    // without CORS approval.  This is safe because the frontend uses fetch/XHR
+    // (governed by CORS, not CORP) rather than no-cors subresource loads.
+    crossOriginResourcePolicy: { policy: "same-origin" },
     crossOriginEmbedderPolicy: false,
-    crossOriginOpenerPolicy: false,
-    crossOriginResourcePolicy: false,
     originAgentCluster: false,
   }),
 );
+
+// ── Permissions-Policy — restrict powerful browser features ───────────────────
+// Helmet 8 does not set this header by default; add it explicitly.
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+  );
+  next();
+});
 
 // ── Request logging ───────────────────────────────────────────────────────────
 app.use(
@@ -88,14 +102,19 @@ app.use(
 // ── Body parsing ──────────────────────────────────────────────────────────────
 app.use(cookieParser());
 app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true, limit: "1mb" }));
+// NOTE: express.urlencoded is intentionally NOT registered — the app is a
+// JSON-only API and URL-encoded bodies would be unused attack surface.
 
-// ── Enforce JSON content-type on mutation endpoints ───────────────────────────
+// ── Enforce Content-Type on mutation endpoints ────────────────────────────────
+// Reject any POST/PUT/PATCH that does not declare an acceptable content type.
+// Checking `ct &&` (old approach) accidentally allowed requests with a missing
+// Content-Type header to bypass this check — fixed by always evaluating.
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (["POST", "PUT", "PATCH"].includes(req.method)) {
     const ct = req.headers["content-type"] ?? "";
-    // Allow multipart (file upload) and JSON; reject everything else
-    if (ct && !ct.includes("application/json") && !ct.includes("multipart/form-data")) {
+    const isJson = ct.includes("application/json");
+    const isMultipart = ct.includes("multipart/form-data");
+    if (!isJson && !isMultipart) {
       return void res.status(415).json({ error: "Unsupported Media Type" });
     }
   }
@@ -169,6 +188,16 @@ const fixLimiter = rateLimit({
 app.post("/api/qa/runs", analysisLimiter);
 app.post("/api/qa/sast", analysisLimiter);
 app.post("/api/qa/runs/:id/generate-fix", fixLimiter);
+
+// ── Prevent API responses from being cached ───────────────────────────────────
+// API responses may contain sensitive user data.  Ensure no intermediate proxy
+// or browser cache stores them.  Applied only to /api/* to avoid interfering
+// with static assets served by other middleware if any are added later.
+app.use("/api", (_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Pragma", "no-cache");
+  next();
+});
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use("/api", router);

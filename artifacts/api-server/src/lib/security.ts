@@ -196,6 +196,19 @@ export function isValidUuid(value: string): boolean {
   return UUID_RE.test(value);
 }
 
+// ─── Session ID validation ────────────────────────────────────────────────────
+
+/**
+ * Sessions are generated with crypto.randomBytes(32).toString("hex") which
+ * produces exactly 64 lowercase hex characters.  Validate this format before
+ * any DB lookup to prevent wasted queries on junk input.
+ */
+const SESSION_ID_RE = /^[0-9a-f]{64}$/i;
+
+export function isValidSessionId(sid: string): boolean {
+  return typeof sid === "string" && SESSION_ID_RE.test(sid);
+}
+
 // ─── Error helpers ───────────────────────────────────────────────────────────
 
 export class SecurityError extends Error {

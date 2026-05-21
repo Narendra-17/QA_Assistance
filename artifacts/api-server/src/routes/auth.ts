@@ -20,10 +20,28 @@ const router: IRouter = Router();
 
 // ── Validation schemas ────────────────────────────────────────────────────────
 
+/**
+ * Password strength rules (NIST SP 800-63B aligned):
+ *  • Minimum 12 characters
+ *  • Maximum 128 characters (bcrypt input limit safety)
+ *  • Must contain at least one uppercase letter, one lowercase letter,
+ *    and one digit or special character.
+ * Length alone is the strongest predictor of resistance to brute-force,
+ * so we prioritise length over arbitrary complexity theatre.
+ */
+const PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*[\d!@#$%^&*()_+\-=\[\]{};':"\\|,.<>/?`~]).{12,128}$/;
+
 const RegisterBody = z.object({
   name: z.string().min(2, "Name must be at least 2 characters").max(80).trim(),
   email: z.string().email("Invalid email address").max(255).trim().toLowerCase(),
-  password: z.string().min(8, "Password must be at least 8 characters").max(128),
+  password: z
+    .string()
+    .min(12, "Password must be at least 12 characters")
+    .max(128, "Password must be at most 128 characters")
+    .regex(
+      PASSWORD_RE,
+      "Password must contain uppercase, lowercase, and a number or special character",
+    ),
 });
 
 const LoginBody = z.object({

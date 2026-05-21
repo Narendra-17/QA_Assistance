@@ -1783,9 +1783,15 @@ export default function Report() {
                         {/* Left severity accent bar */}
                         <div className="absolute top-0 left-0 bottom-0 w-0.5 rounded-l"
                           style={{ background: `linear-gradient(to bottom, ${cfg.color}80, ${cfg.color}20)` }} />
-                        <button
-                          className="w-full text-left flex items-start gap-3 p-4 hover:bg-white/3 transition-colors"
-                          onClick={() => setExpandedIssue(isExpanded ? null : displayIdx)}>
+                        {/* Use div+role instead of <button> — this row contains IssueStatusButton
+                            which itself renders a <button>; nested <button> is invalid HTML. */}
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          aria-expanded={isExpanded}
+                          className="w-full text-left flex items-start gap-3 p-4 hover:bg-white/3 transition-colors cursor-pointer"
+                          onClick={() => setExpandedIssue(isExpanded ? null : displayIdx)}
+                          onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedIssue(isExpanded ? null : displayIdx); } }}>
                           <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
                             style={{ background: `${cfg.color}18`, border: `1px solid ${cfg.border}` }}>
                             <Icon className="w-4 h-4" style={{ color: cfg.color }} />
@@ -1846,7 +1852,7 @@ export default function Report() {
                               {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                             </div>
                           </div>
-                        </button>
+                        </div>
 
                         <AnimatePresence>
                           {isExpanded && (
