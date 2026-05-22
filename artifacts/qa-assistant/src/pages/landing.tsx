@@ -262,7 +262,7 @@ export default function Landing() {
               className="flex items-center flex-wrap gap-5">
               {([
                 { icon: CheckCircle2, text: "No setup required", c: "text-emerald-400" },
-                { icon: Lock,         text: "No data stored",    c: "text-cyan-400" },
+                { icon: Lock,         text: "Data secured at rest", c: "text-cyan-400" },
                 { icon: Code2,        text: "SAST + DAST",       c: "text-violet-400" },
               ] as const).map(({ icon: Icon, text, c }) => (
                 <div key={text} className="flex items-center gap-1.5">

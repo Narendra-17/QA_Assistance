@@ -1195,26 +1195,15 @@ router.patch("/runs/:id/issues/:index/status", async (req: Request, res: Respons
   if (!run) return void res.status(404).json({ error: "Run not found" });
 
   try {
-    // Upsert — insert or update if exists
-    const existing = await db.select({ id: issueStatusesTable.id })
-      .from(issueStatusesTable)
-      .where(and(
-        eq(issueStatusesTable.runId, id),
-        eq(issueStatusesTable.userId, userId),
-        eq(issueStatusesTable.issueIndex, issueIndex),
-      ));
-
-    let result;
-    if (existing.length > 0) {
-      [result] = await db.update(issueStatusesTable)
-        .set({ status: parsed.data.status, note: note ?? undefined })
-        .where(eq(issueStatusesTable.id, existing[0].id))
-        .returning();
-    } else {
-      [result] = await db.insert(issueStatusesTable)
-        .values({ runId: id, userId, issueIndex, status: parsed.data.status, note: note ?? undefined })
-        .returning();
-    }
+    // Atomic upsert — leverages the unique constraint on (runId, userId, issueIndex)
+    // so there is no race condition between a concurrent select and insert.
+    const [result] = await db.insert(issueStatusesTable)
+      .values({ runId: id, userId, issueIndex, status: parsed.data.status, note: note ?? undefined })
+      .onConflictDoUpdate({
+        target: [issueStatusesTable.runId, issueStatusesTable.userId, issueStatusesTable.issueIndex],
+        set: { status: parsed.data.status, note: note ?? undefined },
+      })
+      .returning();
     res.json(result);
   } catch {
     res.status(500).json({ error: "Failed to update issue status" });

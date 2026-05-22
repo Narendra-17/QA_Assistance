@@ -58,8 +58,7 @@ export default function Settings() {
       });
       const data = await resp.json();
       if (!resp.ok) { toast.error(data.error ?? "Failed to update profile"); return; }
-      toast.success("Profile updated — refreshing…");
-      setTimeout(() => window.location.reload(), 900);
+      toast.success("Profile updated successfully");
     } catch {
       toast.error("Failed to update profile");
     } finally {

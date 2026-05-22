@@ -549,6 +549,8 @@ export default function Dashboard() {
             style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}>
             {(["all", "url", "sast"] as FilterType[]).map((f) => (
               <button key={f} onClick={() => setFilter(f)}
+                aria-label={f === "all" ? "Show all runs" : f === "url" ? "Show URL tests only" : "Show SAST scans only"}
+                aria-pressed={filter === f}
                 className={[
                   "relative px-3 py-1 rounded-lg text-xs font-semibold transition-all h-7",
                   filter === f ? "text-white" : "text-zinc-500 hover:text-zinc-300",
@@ -571,7 +573,9 @@ export default function Dashboard() {
             <select
               value={sortBy}
               onChange={e => setSortBy(e.target.value as typeof sortBy)}
+              aria-label="Sort runs"
               className="appearance-none bg-transparent text-zinc-400 text-xs font-medium pl-8 pr-4 h-full focus:outline-none cursor-pointer hover:text-zinc-200 transition-colors"
+              style={{ colorScheme: "dark" }}
             >
               <option value="newest">Newest first</option>
               <option value="oldest">Oldest first</option>

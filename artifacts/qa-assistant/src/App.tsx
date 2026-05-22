@@ -1,4 +1,5 @@
 import { Suspense, lazy, Component, type ReactNode, useState, useEffect } from "react";
+import { PageErrorBoundary } from "@/components/page-error-boundary";
 import { Switch, Route, Router as WouterRouter } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
@@ -29,7 +30,11 @@ function SastPage()    { return <NewRun initialTab="sast" />; }
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 1,
+      retry: (failureCount, error) => {
+        const status = (error as { status?: number })?.status;
+        if (status !== undefined && status < 500) return false;
+        return failureCount < 1;
+      },
       refetchOnWindowFocus: false,
       staleTime:  30 * 1000,
       gcTime:  5 * 60 * 1000,
@@ -105,6 +110,7 @@ function MainLayout({ children }: { children: React.ReactNode }) {
               onClick={() => document.dispatchEvent(new CustomEvent("open-shortcuts"))}
               className="text-zinc-600 hover:text-violet-300 transition-all h-8 w-8 flex items-center justify-center rounded-lg hover:bg-violet-500/10 hover:border hover:border-violet-500/20 border border-transparent"
               title="Keyboard shortcuts (?)"
+              aria-label="View keyboard shortcuts"
             >
               <Keyboard className="w-3.5 h-3.5" />
             </button>
@@ -200,12 +206,12 @@ function ProtectedRouter() {
       <MainLayout>
         <Suspense fallback={<PageLoader />}>
           <Switch>
-            <Route path="/"             component={Dashboard}    />
-            <Route path="/new"          component={UrlTestPage}  />
-            <Route path="/sast"         component={SastPage}     />
-            <Route path="/runs/:id"     component={Report}       />
-            <Route path="/integrations" component={Integrations} />
-            <Route path="/settings"     component={Settings}     />
+            <Route path="/"             component={() => <PageErrorBoundary label="Dashboard"><Dashboard /></PageErrorBoundary>}    />
+            <Route path="/new"          component={() => <PageErrorBoundary label="New Run"><UrlTestPage /></PageErrorBoundary>}    />
+            <Route path="/sast"         component={() => <PageErrorBoundary label="SAST Scan"><SastPage /></PageErrorBoundary>}     />
+            <Route path="/runs/:id"     component={() => <PageErrorBoundary label="Report"><Report /></PageErrorBoundary>}          />
+            <Route path="/integrations" component={() => <PageErrorBoundary label="Integrations"><Integrations /></PageErrorBoundary>} />
+            <Route path="/settings"     component={() => <PageErrorBoundary label="Settings"><Settings /></PageErrorBoundary>}      />
             <Route path="/share/:token" component={SharedReport} />
             <Route                      component={NotFound}     />
           </Switch>

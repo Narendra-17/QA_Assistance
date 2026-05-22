@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Search, LayoutDashboard, Globe, FileCode2, Zap, ArrowRight,
-  X, CheckCircle2, AlertCircle, Loader2, Clock,
+  X, CheckCircle2, AlertCircle, Loader2, Clock, Settings,
 } from "lucide-react";
 import { useListQaRuns } from "@workspace/api-client-react";
 import { formatDistanceToNow } from "date-fns";
@@ -18,6 +18,7 @@ const NAV_ITEMS = [
   { title: "New URL Test",       path: "/new",         icon: Globe,           desc: "Analyze a live application by URL" },
   { title: "New SAST Scan",      path: "/sast",        icon: FileCode2,       desc: "Scan source code for vulnerabilities" },
   { title: "CI/CD Integration",  path: "/integrations",icon: Zap,             desc: "API keys and GitHub Actions setup" },
+  { title: "Settings",           path: "/settings",    icon: Settings,        desc: "Account settings and preferences" },
 ] as const;
 
 function StatusDot({ status }: { status: string }) {
@@ -94,6 +95,9 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           />
 
           <motion.div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Command palette"
             initial={{ opacity: 0, y: -14, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -8, scale: 0.97 }}

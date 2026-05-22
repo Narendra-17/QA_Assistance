@@ -188,6 +188,8 @@ const fixLimiter = rateLimit({
 app.post("/api/qa/runs", analysisLimiter);
 app.post("/api/qa/sast", analysisLimiter);
 app.post("/api/qa/runs/:id/generate-fix", fixLimiter);
+app.patch("/api/auth/profile", authLimiter);
+app.patch("/api/auth/password", authLimiter);
 
 // ── Prevent API responses from being cached ───────────────────────────────────
 // API responses may contain sensitive user data.  Ensure no intermediate proxy
