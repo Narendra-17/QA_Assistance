@@ -6,8 +6,10 @@ import {
   clearSession,
   createSession,
   deleteSession,
+  getSession,
   getSessionId,
   hashPassword,
+  updateSession,
   verifyPassword,
   SESSION_COOKIE,
   SESSION_TTL,
@@ -182,6 +184,100 @@ router.post("/auth/logout", async (req: Request, res: Response) => {
     await deleteSession(sid);
   }
   res.clearCookie(SESSION_COOKIE, { path: "/" });
+  res.json({ success: true });
+});
+
+// ── Profile update ─────────────────────────────────────────────────────────────
+
+const ProfileBody = z.object({
+  firstName: z.string().min(1, "First name is required").max(80).trim(),
+  lastName: z.string().max(80).trim().nullable().optional(),
+});
+
+router.patch("/auth/profile", async (req: Request, res: Response) => {
+  if (!req.isAuthenticated() || !req.user) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+
+  const parsed = ProfileBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.errors[0]?.message ?? "Invalid input" });
+    return;
+  }
+
+  const { firstName, lastName } = parsed.data;
+
+  await db
+    .update(usersTable)
+    .set({ firstName, lastName: lastName ?? null })
+    .where(eq(usersTable.id, req.user.id));
+
+  const sid = getSessionId(req);
+  if (sid) {
+    const session = await getSession(sid);
+    if (session) {
+      session.user.firstName = firstName;
+      session.user.lastName = lastName ?? null;
+      await updateSession(sid, session);
+    }
+  }
+
+  res.json({ success: true, firstName, lastName: lastName ?? null });
+});
+
+// ── Password change ────────────────────────────────────────────────────────────
+
+const PasswordBody = z.object({
+  currentPassword: z.string().min(1).max(128),
+  newPassword: z
+    .string()
+    .min(12, "Password must be at least 12 characters")
+    .max(128)
+    .regex(
+      PASSWORD_RE,
+      "Password must contain uppercase, lowercase, and a number or special character",
+    ),
+});
+
+router.patch("/auth/password", async (req: Request, res: Response) => {
+  if (!req.isAuthenticated() || !req.user) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+
+  const parsed = PasswordBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.errors[0]?.message ?? "Invalid input" });
+    return;
+  }
+
+  const { currentPassword, newPassword } = parsed.data;
+
+  const [user] = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.id, req.user.id));
+
+  if (!user?.passwordHash) {
+    res.status(400).json({ error: "Cannot change password for this account" });
+    return;
+  }
+
+  const valid = await verifyPassword(currentPassword, user.passwordHash);
+  if (!valid) {
+    logSecurityEvent("AUTH_FAILED", req, `wrong current password for user ${req.user.id}`);
+    res.status(401).json({ error: "Current password is incorrect" });
+    return;
+  }
+
+  const newHash = await hashPassword(newPassword);
+  await db
+    .update(usersTable)
+    .set({ passwordHash: newHash })
+    .where(eq(usersTable.id, req.user.id));
+
+  logSecurityEvent("AUTH_SUCCESS", req, `password changed for user ${req.user.id}`);
   res.json({ success: true });
 });
 

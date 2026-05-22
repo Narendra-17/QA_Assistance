@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, ShieldCheck, FileCode2, Globe, LogOut,
-  ChevronRight, Zap, Search, CheckCircle2, Loader2, AlertCircle, Clock,
+  ChevronRight, Zap, Search, CheckCircle2, Loader2, AlertCircle, Clock, Settings,
 } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup,
@@ -22,7 +22,8 @@ const NAV_ITEMS = [
 ] as const;
 
 const BOTTOM_NAV_ITEMS = [
-  { title: "CI/CD", url: "/integrations", icon: Zap, desc: "API keys & GitHub Actions" },
+  { title: "CI/CD",     url: "/integrations", icon: Zap,      desc: "API keys & GitHub Actions", accent: "cyan"   },
+  { title: "Settings",  url: "/settings",     icon: Settings, desc: "Account & security",         accent: "violet" },
 ] as const;
 
 function RunStatusIcon({ status }: { status: string }) {
@@ -155,7 +156,7 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* Integrations */}
+        {/* Integrations & Settings */}
         <SidebarGroup className="mt-1">
           <SidebarGroupLabel className="px-2 mb-1.5 text-[9px] font-bold tracking-[0.18em] text-zinc-600 uppercase">
             Integrations
@@ -164,6 +165,22 @@ export function AppSidebar() {
             <SidebarMenu className="space-y-0.5">
               {BOTTOM_NAV_ITEMS.map((item) => {
                 const isActive = location === item.url;
+                const isCyan = item.accent === "cyan";
+                const activeGrad  = isCyan
+                  ? "bg-gradient-to-r from-cyan-500/12 to-cyan-600/4 text-cyan-300 border border-cyan-500/20"
+                  : "bg-gradient-to-r from-violet-500/12 to-violet-600/4 text-violet-300 border border-violet-500/20";
+                const accentBar   = isCyan
+                  ? "bg-gradient-to-b from-cyan-400 to-cyan-600"
+                  : "bg-gradient-to-b from-violet-400 to-violet-600";
+                const accentGlow  = isCyan
+                  ? "0 0 8px rgba(6,182,212,0.9), 0 0 20px rgba(6,182,212,0.3)"
+                  : "0 0 8px rgba(139,92,246,0.9), 0 0 20px rgba(139,92,246,0.3)";
+                const iconActive  = isCyan
+                  ? "bg-cyan-500/18 shadow-[0_0_12px_rgba(6,182,212,0.25)]"
+                  : "bg-violet-500/18 shadow-[0_0_12px_rgba(139,92,246,0.25)]";
+                const iconColor   = isCyan ? "text-cyan-400" : "text-violet-400";
+                const textColor   = isCyan ? "text-cyan-200" : "text-violet-200";
+                const chevronColor = isCyan ? "text-cyan-500/70" : "text-violet-500/70";
                 return (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton asChild isActive={isActive}>
@@ -172,27 +189,23 @@ export function AppSidebar() {
                           <Link href={item.url} className="focus-visible:outline-none block">
                             <div className={[
                               "relative flex items-center gap-3 px-2.5 py-2 rounded-xl w-full transition-all duration-150 group",
-                              isActive
-                                ? "bg-gradient-to-r from-cyan-500/12 to-cyan-600/4 text-cyan-300 border border-cyan-500/20"
-                                : "text-zinc-400 hover:text-zinc-200 border border-transparent",
+                              isActive ? activeGrad : "text-zinc-400 hover:text-zinc-200 border border-transparent",
                             ].join(" ")}
                             onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.045)"; }}
                             onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = ""; }}
                             >
                               {isActive && (
-                                <span className="absolute left-0 top-[15%] bottom-[15%] w-[3px] rounded-r-full bg-gradient-to-b from-cyan-400 to-cyan-600"
-                                  style={{ boxShadow: "0 0 8px rgba(6,182,212,0.9), 0 0 20px rgba(6,182,212,0.3)" }} />
+                                <span className={`absolute left-0 top-[15%] bottom-[15%] w-[3px] rounded-r-full ${accentBar}`}
+                                  style={{ boxShadow: accentGlow }} />
                               )}
                               <div className={[
                                 "w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200",
-                                isActive
-                                  ? "bg-cyan-500/18 shadow-[0_0_12px_rgba(6,182,212,0.25)]"
-                                  : "bg-white/[0.04] group-hover:bg-white/[0.07]",
+                                isActive ? iconActive : "bg-white/[0.04] group-hover:bg-white/[0.07]",
                               ].join(" ")}>
-                                <item.icon className={`w-3.5 h-3.5 ${isActive ? "text-cyan-400" : "text-zinc-500 group-hover:text-zinc-300 transition-colors"}`} />
+                                <item.icon className={`w-3.5 h-3.5 ${isActive ? iconColor : "text-zinc-500 group-hover:text-zinc-300 transition-colors"}`} />
                               </div>
-                              <span className={`font-medium text-[13px] flex-1 ${isActive ? "text-cyan-200" : ""}`}>{item.title}</span>
-                              {isActive && <ChevronRight className="w-3 h-3 text-cyan-500/70 ml-auto shrink-0" />}
+                              <span className={`font-medium text-[13px] flex-1 ${isActive ? textColor : ""}`}>{item.title}</span>
+                              {isActive && <ChevronRight className={`w-3 h-3 ${chevronColor} ml-auto shrink-0`} />}
                             </div>
                           </Link>
                         </TooltipTrigger>
@@ -264,6 +277,32 @@ export function AppSidebar() {
 
       {/* User footer */}
       <SidebarFooter className="px-2.5 py-3 border-t border-white/[0.06]">
+        {/* Scan quota pill */}
+        {runsData?.runs != null && (
+          <div className="px-1 mb-2.5">
+            <div className="flex items-center justify-between text-[10px] mb-1">
+              <span className="text-zinc-600 font-medium">Scan quota</span>
+              <span className="font-mono tabular-nums"
+                style={{
+                  color: runsData.runs.length >= 450 ? "#EF4444"
+                    : runsData.runs.length >= 400 ? "#F59E0B" : "#71717a",
+                }}>
+                {runsData.runs.length} / 500
+              </span>
+            </div>
+            <div className="h-1 rounded-full bg-white/[0.05] overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{
+                  width: `${Math.min((runsData.runs.length / 500) * 100, 100)}%`,
+                  background: runsData.runs.length >= 450 ? "#EF4444"
+                    : runsData.runs.length >= 400 ? "#F59E0B" : "#8B5CF6",
+                }}
+              />
+            </div>
+          </div>
+        )}
+
         {/* User card */}
         <div
           className="flex items-center gap-2.5 px-2.5 py-2.5 rounded-xl mb-1.5 relative overflow-hidden"

@@ -21,6 +21,7 @@ const NewRun       = lazy(() => import("@/pages/new-run"));
 const Report       = lazy(() => import("@/pages/report"));
 const SharedReport = lazy(() => import("@/pages/shared-report"));
 const Integrations = lazy(() => import("@/pages/integrations"));
+const Settings     = lazy(() => import("@/pages/settings"));
 
 function UrlTestPage() { return <NewRun initialTab="url"  />; }
 function SastPage()    { return <NewRun initialTab="sast" />; }
@@ -204,6 +205,7 @@ function ProtectedRouter() {
             <Route path="/sast"         component={SastPage}     />
             <Route path="/runs/:id"     component={Report}       />
             <Route path="/integrations" component={Integrations} />
+            <Route path="/settings"     component={Settings}     />
             <Route path="/share/:token" component={SharedReport} />
             <Route                      component={NotFound}     />
           </Switch>

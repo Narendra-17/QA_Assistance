@@ -6,7 +6,7 @@ import { Link, useLocation } from "wouter";
 import { formatDistanceToNow } from "date-fns";
 import {
   Plus, Trash2, Globe, FileCode2, AlertTriangle, TrendingUp,
-  Activity, Loader2, Search, ShieldAlert, CheckCircle2, RotateCcw,
+  Activity, Loader2, Search, ShieldAlert, CheckCircle2, RotateCcw, ArrowUpDown,
 } from "lucide-react";
 import { usePageTitle } from "@/hooks/use-page-title";
 import {
@@ -327,6 +327,7 @@ export default function Dashboard() {
   usePageTitle("Dashboard");
   const [filter,   setFilter]   = useState<FilterType>("all");
   const [search,   setSearch]   = useState("");
+  const [sortBy,   setSortBy]   = useState<"newest" | "oldest" | "score-desc" | "score-asc">("newest");
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [, setLocation] = useLocation();
 
@@ -354,8 +355,14 @@ export default function Dashboard() {
         r.appDescription?.toLowerCase().includes(q),
       );
     }
+    list = [...list].sort((a, b) => {
+      if (sortBy === "oldest")     return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      if (sortBy === "score-desc") return (b.score ?? -1) - (a.score ?? -1);
+      if (sortBy === "score-asc")  return (a.score ?? 101) - (b.score ?? 101);
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
     return list;
-  }, [allRuns, filter, search]);
+  }, [allRuns, filter, search, sortBy]);
 
   function confirmDelete(id: string, e: React.MouseEvent) {
     e.preventDefault(); e.stopPropagation(); setDeleteId(id);
@@ -525,9 +532,9 @@ export default function Dashboard() {
           );
         })()}
 
-        {/* ── Search + filter ── */}
+        {/* ── Search + filter + sort ── */}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.15 }}
-          className="flex flex-col sm:flex-row gap-3">
+          className="flex flex-col sm:flex-row gap-3 flex-wrap">
           <div className="relative flex-1 max-w-xs">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
             <Input
@@ -544,9 +551,7 @@ export default function Dashboard() {
               <button key={f} onClick={() => setFilter(f)}
                 className={[
                   "relative px-3 py-1 rounded-lg text-xs font-semibold transition-all h-7",
-                  filter === f
-                    ? "text-white"
-                    : "text-zinc-500 hover:text-zinc-300",
+                  filter === f ? "text-white" : "text-zinc-500 hover:text-zinc-300",
                 ].join(" ")}
                 style={filter === f ? {
                   background: "linear-gradient(135deg, hsl(258,85%,58%), hsl(258,80%,50%))",
@@ -558,6 +563,21 @@ export default function Dashboard() {
                     : `SAST (${allRuns.filter(r => r.runType === "sast").length})`}
               </button>
             ))}
+          </div>
+          {/* Sort dropdown */}
+          <div className="relative h-9 flex items-center rounded-xl"
+            style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}>
+            <ArrowUpDown className="absolute left-3 w-3.5 h-3.5 text-zinc-500 pointer-events-none" />
+            <select
+              value={sortBy}
+              onChange={e => setSortBy(e.target.value as typeof sortBy)}
+              className="appearance-none bg-transparent text-zinc-400 text-xs font-medium pl-8 pr-4 h-full focus:outline-none cursor-pointer hover:text-zinc-200 transition-colors"
+            >
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="score-desc">Highest score</option>
+              <option value="score-asc">Lowest score</option>
+            </select>
           </div>
         </motion.div>
 
