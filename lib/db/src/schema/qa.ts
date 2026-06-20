@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, integer, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, jsonb, integer, unique, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./auth";
@@ -15,6 +15,7 @@ export const qaRunsTable = pgTable("qa_runs", {
   status: text("status", { enum: ["pending", "running", "completed", "failed"] }).notNull().default("pending"),
   errorMessage: text("error_message"),
   report: jsonb("report"),
+  pinned: boolean("pinned").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });

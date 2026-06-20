@@ -1210,6 +1210,116 @@ router.patch("/runs/:id/issues/:index/status", async (req: Request, res: Respons
   }
 });
 
+// ─── Toggle pin ──────────────────────────────────────────────────────────────
+
+router.patch("/runs/:id/pin", async (req: Request, res: Response) => {
+  if (!isAuthed(req)) {
+    logSecurityEvent("AUTH_MISSING", req, `PATCH /runs/${req.params.id}/pin`);
+    return void res.status(401).json({ error: "Authentication required" });
+  }
+  const id = String(req.params.id);
+  if (!isValidUuid(id)) return void res.status(400).json({ error: "Invalid run ID format" });
+
+  const userId = (req.user as { id: string }).id;
+  const [run] = await db.select({ id: qaRunsTable.id, pinned: qaRunsTable.pinned })
+    .from(qaRunsTable).where(and(eq(qaRunsTable.id, id), eq(qaRunsTable.userId, userId)));
+  if (!run) return void res.status(404).json({ error: "Run not found" });
+
+  const [updated] = await db.update(qaRunsTable)
+    .set({ pinned: !run.pinned })
+    .where(eq(qaRunsTable.id, id))
+    .returning({ pinned: qaRunsTable.pinned });
+  res.json({ pinned: updated.pinned });
+});
+
+// ─── Rescan ───────────────────────────────────────────────────────────────────
+// Creates a new run with the same type / URL / description as an existing one.
+
+router.post("/runs/:id/rescan", async (req: Request, res: Response) => {
+  if (!isAuthed(req)) {
+    logSecurityEvent("AUTH_MISSING", req, `POST /runs/${req.params.id}/rescan`);
+    return void res.status(401).json({ error: "Authentication required" });
+  }
+  const id = String(req.params.id);
+  if (!isValidUuid(id)) return void res.status(400).json({ error: "Invalid run ID format" });
+
+  const userId = (req.user as { id: string }).id;
+
+  const [orig] = await db.select().from(qaRunsTable)
+    .where(and(eq(qaRunsTable.id, id), eq(qaRunsTable.userId, userId)));
+  if (!orig) return void res.status(404).json({ error: "Run not found" });
+
+  if (orig.runType === "sast") {
+    return void res.status(400).json({ error: "SAST re-scan requires the original source files. Start a new scan from the SAST scan page." });
+  }
+  if (!orig.appUrl) return void res.status(400).json({ error: "No URL to re-scan" });
+
+  try {
+    await assertSafeUrl(orig.appUrl);
+  } catch (err) {
+    if (err instanceof SecurityError) {
+      logSecurityEvent("SSRF_BLOCKED", req, `Rescan URL: ${orig.appUrl} — ${err.message}`);
+      return void res.status(400).json({ error: err.message });
+    }
+    return void res.status(500).json({ error: "Failed to validate URL" });
+  }
+
+  try {
+    const [{ runCount }] = await db.select({ runCount: count() }).from(qaRunsTable).where(eq(qaRunsTable.userId, userId));
+    if (runCount >= MAX_RUNS_PER_USER) {
+      return void res.status(429).json({ error: `Scan limit reached (${MAX_RUNS_PER_USER} scans). Delete old runs to continue.` });
+    }
+
+    const [newRun] = await db.insert(qaRunsTable)
+      .values({ userId, runType: "url", appUrl: orig.appUrl, appDescription: orig.appDescription ?? "", status: "running" })
+      .returning();
+    res.status(201).json(newRun);
+
+    analyzeUrl(orig.appUrl, orig.appDescription ?? "")
+      .then(report =>
+        db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, newRun.id)),
+      )
+      .catch(async (err) => {
+        const msg = safeErrorMessage(err, "analyzeUrl");
+        await db.update(qaRunsTable).set({ status: "failed", errorMessage: msg }).where(eq(qaRunsTable.id, newRun.id));
+      });
+  } catch {
+    res.status(500).json({ error: "Failed to create re-scan" });
+  }
+});
+
+// ─── Bulk delete ──────────────────────────────────────────────────────────────
+// Deletes multiple runs by ID in a single request. Each ID is validated and
+// must belong to the authenticated user.
+
+router.post("/bulk-delete", async (req: Request, res: Response) => {
+  if (!isAuthed(req)) {
+    logSecurityEvent("AUTH_MISSING", req, "POST /bulk-delete");
+    return void res.status(401).json({ error: "Authentication required" });
+  }
+
+  const bulkSchema = z.object({ ids: z.array(z.string().uuid()).min(1).max(100) });
+  const parsed = bulkSchema.safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ error: "Invalid input — expected { ids: string[] } with 1–100 valid UUIDs" });
+
+  const userId = (req.user as { id: string }).id;
+  const { ids } = parsed.data;
+
+  const { inArray } = await import("drizzle-orm");
+
+  try {
+    const deleted = await db.delete(qaRunsTable)
+      .where(and(
+        inArray(qaRunsTable.id, ids),
+        eq(qaRunsTable.userId, userId),
+      ))
+      .returning({ id: qaRunsTable.id });
+    res.json({ deleted: deleted.length, ids: deleted.map(r => r.id) });
+  } catch {
+    res.status(500).json({ error: "Bulk delete failed" });
+  }
+});
+
 // ─── AI Code Fix Generator ────────────────────────────────────────────────────
 // Generates a ready-to-paste, language-specific fix for a single issue.
 

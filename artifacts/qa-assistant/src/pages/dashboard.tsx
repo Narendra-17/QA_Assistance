@@ -6,7 +6,9 @@ import { Link, useLocation } from "wouter";
 import { formatDistanceToNow } from "date-fns";
 import {
   Plus, Trash2, Globe, FileCode2, AlertTriangle, TrendingUp,
-  Activity, Loader2, Search, ShieldAlert, CheckCircle2, RotateCcw, ArrowUpDown,
+  Activity, Loader2, Search, ShieldAlert, CheckCircle2, RotateCcw,
+  ArrowUpDown, Star, Download, SquareCheck, Square, RotateCw, X,
+  ChevronDown,
 } from "lucide-react";
 import { usePageTitle } from "@/hooks/use-page-title";
 import {
@@ -16,8 +18,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { motion, AnimatePresence, type Variants } from "framer-motion";
-import { useState, useMemo, useEffect, useRef } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useQueryClient, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -196,15 +198,12 @@ function StatCard({ label, value, sub, icon: Icon, color, loading }: {
       whileHover={{ y: -2 }}
       transition={{ duration: 0.18 }}
     >
-      {/* Colored top edge */}
       <div className="absolute top-0 left-4 right-4 h-px transition-all duration-300"
         style={{ background: `linear-gradient(90deg, transparent, ${color}60, transparent)` }} />
 
-      {/* Hover radial glow */}
       <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-400 pointer-events-none"
         style={{ background: `radial-gradient(ellipse at 0% 0%, ${color}0D 0%, transparent 65%)` }} />
 
-      {/* Icon */}
       <div
         className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 relative z-10 transition-all duration-200 group-hover:scale-110"
         style={{ background: `${color}16`, border: `1px solid ${color}28`, boxShadow: `0 0 12px ${color}18` }}
@@ -224,7 +223,6 @@ function StatCard({ label, value, sub, icon: Icon, color, loading }: {
         {sub && <div className="text-xs text-zinc-600 mt-0.5">{sub}</div>}
       </div>
 
-      {/* Bottom right corner accent */}
       <div className="absolute bottom-0 right-0 w-16 h-16 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
         style={{ background: `radial-gradient(circle at 100% 100%, ${color}08, transparent 70%)` }} />
     </motion.div>
@@ -314,21 +312,62 @@ function OwaspHeatmap({ breakdown }: { breakdown: Array<{ code: string; count: n
 
 type FilterType = "all" | "url" | "sast";
 
-// The API returns extra fields not reflected in the generated schema
 interface QaRunExtended {
   id: string; userId: string; appUrl?: string | null; appDescription?: string | null;
   projectName?: string | null; status: string; runType: string; errorMessage?: string | null;
   createdAt: string; updatedAt: string;
   score?: number | null;
+  pinned?: boolean | null;
   issues?: Array<{ severity: string }> | null;
+}
+
+// ── CSV helpers ───────────────────────────────────────────────────────────────
+function escapeCsv(v: unknown): string {
+  const s = v == null ? "" : String(v);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function downloadCsv(rows: string[][], filename: string) {
+  const csv = rows.map(r => r.map(escapeCsv).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── API helpers ───────────────────────────────────────────────────────────────
+const BASE = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
+
+async function apiPatch(path: string) {
+  const r = await fetch(`${BASE}${path}`, { method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json" } });
+  if (!r.ok) { const e = await r.json().catch(() => ({})) as { error?: string }; throw new Error(e.error ?? "Request failed"); }
+  return r.json() as Promise<Record<string, unknown>>;
+}
+
+async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+  const r = await fetch(`${BASE}${path}`, {
+    method: "POST", credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) { const e = await r.json().catch(() => ({})) as { error?: string }; throw new Error(e.error ?? "Request failed"); }
+  return r.json() as Promise<T>;
 }
 
 export default function Dashboard() {
   usePageTitle("Dashboard");
-  const [filter,   setFilter]   = useState<FilterType>("all");
-  const [search,   setSearch]   = useState("");
-  const [sortBy,   setSortBy]   = useState<"newest" | "oldest" | "score-desc" | "score-asc">("newest");
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [filter,      setFilter]      = useState<FilterType>("all");
+  const [search,      setSearch]      = useState("");
+  const [sortBy,      setSortBy]      = useState<"newest" | "oldest" | "score-desc" | "score-asc">("newest");
+  const [deleteId,    setDeleteId]    = useState<string | null>(null);
+  const [selectMode,  setSelectMode]  = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDelConfirm, setBulkDelConfirm] = useState(false);
+  const [pinningId,   setPinningId]   = useState<string | null>(null);
+  const [rescanningId, setRescanningId] = useState<string | null>(null);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [, setLocation] = useLocation();
 
   const { data, isLoading, refetch }                           = useListQaRuns();
@@ -345,6 +384,11 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, [runningCount, refetch, refetchStats]);
 
+  // Exit select mode when no runs
+  useEffect(() => {
+    if (allRuns.length === 0) { setSelectMode(false); setSelectedIds(new Set()); }
+  }, [allRuns.length]);
+
   const runs = useMemo(() => {
     let list = filter === "all" ? allRuns : allRuns.filter(r => r.runType === filter);
     if (search.trim()) {
@@ -356,6 +400,9 @@ export default function Dashboard() {
       );
     }
     list = [...list].sort((a, b) => {
+      // Pinned runs always float to top
+      if (a.pinned && !b.pinned) return -1;
+      if (!a.pinned && b.pinned) return 1;
       if (sortBy === "oldest")     return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
       if (sortBy === "score-desc") return (b.score ?? -1) - (a.score ?? -1);
       if (sortBy === "score-asc")  return (a.score ?? 101) - (b.score ?? 101);
@@ -381,14 +428,106 @@ export default function Dashboard() {
     });
   }
 
+  const toggleSelect = useCallback((id: string, e: React.MouseEvent) => {
+    e.stopPropagation(); e.preventDefault();
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const exitSelectMode = useCallback(() => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  async function handleBulkDelete() {
+    if (selectedIds.size === 0) return;
+    setBulkDeleting(true);
+    try {
+      const res = await apiPost<{ deleted: number }>("/api/qa/bulk-delete", { ids: [...selectedIds] });
+      queryClient.invalidateQueries({ queryKey: getListQaRunsQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetQaStatsQueryKey() });
+      toast.success(`Deleted ${res.deleted} run${res.deleted !== 1 ? "s" : ""}`);
+      exitSelectMode();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Bulk delete failed");
+    } finally {
+      setBulkDeleting(false);
+      setBulkDelConfirm(false);
+    }
+  }
+
+  async function handlePin(id: string, e: React.MouseEvent) {
+    e.stopPropagation(); e.preventDefault();
+    if (pinningId === id) return;
+    setPinningId(id);
+    try {
+      const res = await apiPatch(`/api/qa/runs/${id}/pin`);
+      queryClient.setQueryData(getListQaRunsQueryKey(), (old: { runs: QaRunExtended[] } | undefined) => {
+        if (!old) return old;
+        return { ...old, runs: old.runs.map(r => r.id === id ? { ...r, pinned: res.pinned } : r) };
+      });
+      toast.success((res.pinned as boolean) ? "Run pinned" : "Run unpinned");
+    } catch {
+      toast.error("Failed to update pin");
+    } finally {
+      setPinningId(null);
+    }
+  }
+
+  async function handleRescan(id: string, e: React.MouseEvent) {
+    e.stopPropagation(); e.preventDefault();
+    if (rescanningId) return;
+    setRescanningId(id);
+    try {
+      const newRun = await apiPost<{ id: string }>(`/api/qa/runs/${id}/rescan`);
+      queryClient.invalidateQueries({ queryKey: getListQaRunsQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetQaStatsQueryKey() });
+      toast.success("Re-scan started!");
+      setLocation(`/runs/${newRun.id}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Re-scan failed");
+    } finally {
+      setRescanningId(null);
+    }
+  }
+
+  function exportCsv() {
+    const header = ["ID", "Type", "Target", "Status", "Score", "Issues", "Pinned", "Created At"];
+    const rows   = runs.map(r => [
+      r.id,
+      r.runType.toUpperCase(),
+      r.appUrl ?? r.projectName ?? "",
+      r.status,
+      r.score != null ? String(r.score) : "",
+      r.issues ? String(r.issues.length) : "",
+      r.pinned ? "Yes" : "No",
+      new Date(r.createdAt).toISOString(),
+    ]);
+    downloadCsv([header, ...rows], `qa-runs-${new Date().toISOString().slice(0, 10)}.csv`);
+    toast.success("Runs exported as CSV");
+  }
+
+  const allVisibleSelected = runs.length > 0 && runs.every(r => selectedIds.has(r.id));
+
+  function toggleSelectAll() {
+    if (allVisibleSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(runs.map(r => r.id)));
+    }
+  }
+
   return (
     <>
+      {/* Single delete dialog */}
       <AlertDialog open={!!deleteId} onOpenChange={(o) => !o && setDeleteId(null)}>
         <AlertDialogContent
           className="border-white/8 rounded-2xl overflow-hidden"
           style={{ background: "hsl(230,24%,9%)", boxShadow: "0 32px 80px rgba(0,0,0,0.5)" }}
         >
-          {/* Top accent line */}
           <div className="absolute top-0 inset-x-0 h-px"
             style={{ background: "linear-gradient(90deg, transparent, rgba(239,68,68,0.5), transparent)" }} />
           <AlertDialogHeader>
@@ -405,6 +544,35 @@ export default function Dashboard() {
               style={{ boxShadow: "0 4px 16px rgba(239,68,68,0.3)" }}
             >
               {deleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Bulk delete confirm dialog */}
+      <AlertDialog open={bulkDelConfirm} onOpenChange={(o) => !o && setBulkDelConfirm(false)}>
+        <AlertDialogContent
+          className="border-white/8 rounded-2xl overflow-hidden"
+          style={{ background: "hsl(230,24%,9%)", boxShadow: "0 32px 80px rgba(0,0,0,0.5)" }}
+        >
+          <div className="absolute top-0 inset-x-0 h-px"
+            style={{ background: "linear-gradient(90deg, transparent, rgba(239,68,68,0.5), transparent)" }} />
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-white font-display">
+              Delete {selectedIds.size} run{selectedIds.size !== 1 ? "s" : ""}?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-zinc-400">
+              This permanently removes the selected runs and their reports. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-white/10 bg-white/4 text-white hover:bg-white/8 rounded-xl">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleBulkDelete}
+              className="bg-red-600 hover:bg-red-500 text-white rounded-xl transition-all"
+              style={{ boxShadow: "0 4px 16px rgba(239,68,68,0.3)" }}
+            >
+              {bulkDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : `Delete ${selectedIds.size}`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -438,7 +606,25 @@ export default function Dashboard() {
             </div>
             <p className="text-zinc-500 mt-0.5 text-sm">Your security assessments and scan history.</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            {/* Export CSV */}
+            {allRuns.length > 0 && (
+              <Button variant="outline" size="sm" onClick={exportCsv}
+                className="border-white/10 bg-white/3 hover:bg-white/7 hover:border-emerald-500/25 text-zinc-400 hover:text-emerald-300 rounded-xl h-9 transition-all gap-1.5">
+                <Download className="w-3.5 h-3.5" />Export CSV
+              </Button>
+            )}
+            {/* Select mode toggle */}
+            {allRuns.length > 0 && (
+              <Button variant="outline" size="sm"
+                onClick={() => { setSelectMode(v => !v); if (selectMode) setSelectedIds(new Set()); }}
+                className={[
+                  "border-white/10 bg-white/3 rounded-xl h-9 transition-all gap-1.5",
+                  selectMode ? "border-violet-500/40 bg-violet-500/10 text-violet-300" : "text-zinc-400 hover:bg-white/7 hover:text-zinc-200",
+                ].join(" ")}>
+                {selectMode ? <><X className="w-3.5 h-3.5" />Cancel</> : <><SquareCheck className="w-3.5 h-3.5" />Select</>}
+              </Button>
+            )}
             <Button asChild variant="outline" size="sm"
               className="border-white/10 bg-white/3 hover:bg-white/7 hover:border-cyan-500/25 text-zinc-300 hover:text-cyan-300 rounded-xl h-9 transition-all gap-1.5">
               <Link href="/sast"><FileCode2 className="w-3.5 h-3.5" />SAST Scan</Link>
@@ -532,9 +718,50 @@ export default function Dashboard() {
           );
         })()}
 
+        {/* ── Bulk action bar (shown when items are selected) ── */}
+        <AnimatePresence>
+          {selectMode && selectedIds.size > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              className="flex items-center gap-3 px-4 py-3 rounded-2xl border border-violet-500/25"
+              style={{ background: "rgba(139,92,246,0.07)" }}
+            >
+              <span className="text-sm font-semibold text-violet-300">
+                {selectedIds.size} run{selectedIds.size !== 1 ? "s" : ""} selected
+              </span>
+              <div className="flex-1" />
+              <Button size="sm" variant="outline" onClick={exitSelectMode}
+                className="border-white/10 bg-white/4 text-zinc-400 hover:text-zinc-200 rounded-xl h-8 text-xs gap-1">
+                <X className="w-3 h-3" />Clear
+              </Button>
+              <Button size="sm"
+                onClick={() => setBulkDelConfirm(true)}
+                className="bg-red-600/80 hover:bg-red-600 text-white rounded-xl h-8 text-xs gap-1.5"
+                style={{ boxShadow: "0 2px 12px rgba(239,68,68,0.25)" }}>
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete {selectedIds.size}
+              </Button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* ── Search + filter + sort ── */}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.15 }}
           className="flex flex-col sm:flex-row gap-3 flex-wrap">
+          {/* Select all checkbox (in select mode) */}
+          {selectMode && runs.length > 0 && (
+            <button
+              onClick={toggleSelectAll}
+              className="flex items-center gap-2 px-3 h-9 rounded-xl border border-white/8 bg-white/3 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+            >
+              {allVisibleSelected
+                ? <SquareCheck className="w-4 h-4 text-violet-400" />
+                : <Square className="w-4 h-4" />}
+              {allVisibleSelected ? "Deselect all" : "Select all"}
+            </button>
+          )}
           <div className="relative flex-1 max-w-xs">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
             <Input
@@ -651,22 +878,37 @@ export default function Dashboard() {
                 const label      = run.appUrl ?? run.projectName ?? "Unnamed scan";
                 const hasScore   = run.status === "completed" && run.score != null;
                 const score      = run.score ?? 0;
+                const isSelected = selectedIds.has(run.id);
+                const isPinned   = !!run.pinned;
+                const isRescanning = rescanningId === run.id;
 
                 return (
                   <motion.div key={run.id} variants={ITEM} layout exit={{ opacity: 0, scale: 0.97 }}>
                     <div
-                      onClick={() => setLocation(`/runs/${run.id}`)}
+                      onClick={() => selectMode ? setSelectedIds(prev => {
+                        const next = new Set(prev);
+                        if (next.has(run.id)) next.delete(run.id); else next.add(run.id);
+                        return next;
+                      }) : setLocation(`/runs/${run.id}`)}
                       className="group flex items-center gap-4 px-4 py-3.5 rounded-2xl cursor-pointer transition-all duration-200 relative overflow-hidden"
                       style={{
-                        background: "linear-gradient(135deg, hsl(230,22%,8%), hsl(230,22%,7.5%))",
-                        border: "1px solid rgba(255,255,255,0.06)",
+                        background: isSelected
+                          ? "linear-gradient(135deg, hsl(258,30%,11%), hsl(258,25%,10%))"
+                          : "linear-gradient(135deg, hsl(230,22%,8%), hsl(230,22%,7.5%))",
+                        border: isSelected
+                          ? "1px solid rgba(139,92,246,0.35)"
+                          : isPinned
+                            ? "1px solid rgba(245,158,11,0.18)"
+                            : "1px solid rgba(255,255,255,0.06)",
                       }}
                       onMouseEnter={e => {
+                        if (isSelected) return;
                         (e.currentTarget as HTMLElement).style.borderColor = "rgba(139,92,246,0.2)";
                         (e.currentTarget as HTMLElement).style.background = "linear-gradient(135deg, hsl(230,22%,9%), hsl(230,22%,8%))";
                       }}
                       onMouseLeave={e => {
-                        (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.06)";
+                        if (isSelected) return;
+                        (e.currentTarget as HTMLElement).style.borderColor = isPinned ? "rgba(245,158,11,0.18)" : "rgba(255,255,255,0.06)";
                         (e.currentTarget as HTMLElement).style.background = "linear-gradient(135deg, hsl(230,22%,8%), hsl(230,22%,7.5%))";
                       }}
                     >
@@ -674,20 +916,35 @@ export default function Dashboard() {
                       <div className="absolute left-0 top-[20%] bottom-[20%] w-0.5 rounded-r-full opacity-0 group-hover:opacity-100 transition-all duration-200"
                         style={{ background: isUrl ? "rgba(139,92,246,0.7)" : "rgba(6,182,212,0.7)" }} />
 
-                      {/* Type icon */}
-                      <div className={[
-                        "w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105",
-                        isUrl ? "bg-violet-500/12 border border-violet-500/18" : "bg-cyan-500/12 border border-cyan-500/18",
-                      ].join(" ")}>
-                        {isUrl
-                          ? <Globe     className="w-4 h-4 text-violet-400" />
-                          : <FileCode2 className="w-4 h-4 text-cyan-400" />}
-                      </div>
+                      {/* Checkbox (select mode) OR Type icon */}
+                      {selectMode ? (
+                        <div onClick={(e) => toggleSelect(run.id, e)}
+                          className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-all border"
+                          style={isSelected
+                            ? { background: "rgba(139,92,246,0.25)", borderColor: "rgba(139,92,246,0.5)" }
+                            : { background: "rgba(255,255,255,0.04)", borderColor: "rgba(255,255,255,0.1)" }}>
+                          {isSelected
+                            ? <SquareCheck className="w-4.5 h-4.5 text-violet-400" />
+                            : <Square className="w-4.5 h-4.5 text-zinc-600" />}
+                        </div>
+                      ) : (
+                        <div className={[
+                          "w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105",
+                          isUrl ? "bg-violet-500/12 border border-violet-500/18" : "bg-cyan-500/12 border border-cyan-500/18",
+                        ].join(" ")}>
+                          {isUrl
+                            ? <Globe     className="w-4 h-4 text-violet-400" />
+                            : <FileCode2 className="w-4 h-4 text-cyan-400" />}
+                        </div>
+                      )}
 
                       {/* Label + meta */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-sm font-medium text-white group-hover:text-violet-100 transition-colors truncate">{label}</span>
+                          {isPinned && !selectMode && (
+                            <Star className="w-3 h-3 text-amber-400 shrink-0 fill-amber-400" />
+                          )}
                           {isRunning && <LiveElapsed startedAt={run.createdAt} />}
                         </div>
                         <div className="flex items-center gap-2 mt-0.5">
@@ -721,14 +978,48 @@ export default function Dashboard() {
                       {/* Status badge */}
                       <StatusBadge status={run.status as "pending" | "running" | "completed" | "failed"} />
 
-                      {/* Delete button */}
-                      <button
-                        onClick={(e) => confirmDelete(run.id, e)}
-                        className="text-zinc-700 hover:text-red-400 transition-all ml-1 opacity-0 group-hover:opacity-100 p-1 rounded-lg hover:bg-red-500/8"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      {/* Action buttons (hidden in select mode) */}
+                      {!selectMode && (
+                        <div className="flex items-center gap-0.5 ml-1 opacity-0 group-hover:opacity-100 transition-all">
+                          {/* Pin button */}
+                          <button
+                            onClick={(e) => handlePin(run.id, e)}
+                            className={[
+                              "p-1.5 rounded-lg transition-all",
+                              isPinned
+                                ? "text-amber-400 hover:bg-amber-500/10"
+                                : "text-zinc-700 hover:text-amber-400 hover:bg-amber-500/8",
+                            ].join(" ")}
+                            title={isPinned ? "Unpin" : "Pin to top"}
+                          >
+                            {pinningId === run.id
+                              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              : <Star className={["w-3.5 h-3.5", isPinned ? "fill-amber-400" : ""].join(" ")} />}
+                          </button>
+
+                          {/* Re-scan button (URL only) */}
+                          {run.runType === "url" && run.status === "completed" && (
+                            <button
+                              onClick={(e) => handleRescan(run.id, e)}
+                              className="p-1.5 rounded-lg text-zinc-700 hover:text-cyan-400 transition-all hover:bg-cyan-500/8"
+                              title="Re-scan with same URL"
+                            >
+                              {isRescanning
+                                ? <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                                : <RotateCw className="w-3.5 h-3.5" />}
+                            </button>
+                          )}
+
+                          {/* Delete button */}
+                          <button
+                            onClick={(e) => confirmDelete(run.id, e)}
+                            className="p-1.5 rounded-lg text-zinc-700 hover:text-red-400 transition-all hover:bg-red-500/8"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </motion.div>
                 );

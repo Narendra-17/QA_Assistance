@@ -4,7 +4,7 @@ import { formatDistanceToNow, format } from "date-fns";
 import {
   ArrowLeft, AlertTriangle, ShieldAlert, Info, Bug, CheckCircle2,
   Copy, Download, Globe, FileCode2, Loader2, XCircle,
-  TrendingUp, BarChart3, RotateCcw, ChevronDown, ChevronUp,
+  TrendingUp, BarChart3, RotateCcw, RotateCw, ChevronDown, ChevronUp,
   Share2, FileText, Shield, Clock, Check, Eye, X, Zap,
   Wand2, Target, Swords, Layers, Search, Bell, History, ListFilter, ArrowUpDown,
 } from "lucide-react";
@@ -1269,6 +1269,34 @@ export default function Report() {
     }
   }
 
+  // One-click rescan — calls the API and navigates directly to the new run
+  const [rescanning, setRescanning] = useState(false);
+  async function handleRescan() {
+    if (!run || rescanning) return;
+    setRescanning(true);
+    try {
+      const BASE = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
+      const resp = await fetch(`${BASE}/api/qa/runs/${run.id}/rescan`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!resp.ok) {
+        const e = await resp.json().catch(() => ({})) as { error?: string };
+        toast.error(e.error ?? "Re-scan failed");
+        return;
+      }
+      const newRun = await resp.json() as { id: string };
+      queryClient.invalidateQueries({ queryKey: ["qa-runs"] });
+      toast.success("Re-scan started!");
+      setLocation(`/runs/${newRun.id}`);
+    } catch {
+      toast.error("Re-scan failed — please try again");
+    } finally {
+      setRescanning(false);
+    }
+  }
+
   function handleStatusUpdate(index: number, status: IssueStatus["status"]) {
     updateStatusMutation.mutate({ index, status });
   }
@@ -1371,16 +1399,37 @@ export default function Report() {
           </div>
 
           <div className="flex gap-2 flex-wrap">
-            <Button variant="outline" size="sm" onClick={handleRerun}
-              className="border-white/10 bg-white/4 hover:bg-white/8 text-white rounded-xl h-9 gap-1.5">
-              <RotateCcw className="w-3.5 h-3.5" />New Run
-            </Button>
+            {/* Re-scan (URL only, one-click) */}
+            {run.status === "completed" && run.runType === "url" && (
+              <Button variant="outline" size="sm" onClick={handleRescan} disabled={rescanning}
+                className="border-cyan-500/25 bg-cyan-500/6 hover:bg-cyan-500/12 text-cyan-300 hover:text-cyan-200 rounded-xl h-9 gap-1.5 transition-all"
+                style={{ boxShadow: rescanning ? undefined : "0 0 0 0 transparent" }}>
+                {rescanning
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <RotateCw className="w-3.5 h-3.5" />}
+                Re-scan
+              </Button>
+            )}
+            {/* SAST: navigate to form */}
+            {run.runType === "sast" && (
+              <Button variant="outline" size="sm" onClick={handleRerun}
+                className="border-white/10 bg-white/4 hover:bg-white/8 text-white rounded-xl h-9 gap-1.5">
+                <RotateCcw className="w-3.5 h-3.5" />New Run
+              </Button>
+            )}
             {run.status === "completed" && (
               <>
                 <Button variant="outline" size="sm" onClick={copyReport}
                   className="border-white/10 bg-white/4 hover:bg-white/8 text-white rounded-xl h-9 gap-1.5">
                   <Copy className="w-3.5 h-3.5" />Copy
                 </Button>
+                {/* CSV export of issues */}
+                {allIssues.length > 0 && (
+                  <Button variant="outline" size="sm" onClick={downloadCsv}
+                    className="border-emerald-500/25 bg-emerald-500/6 hover:bg-emerald-500/12 text-emerald-300 hover:text-emerald-200 rounded-xl h-9 gap-1.5">
+                    <Download className="w-3.5 h-3.5" />CSV
+                  </Button>
+                )}
                 <Button variant="outline" size="sm" onClick={downloadJson}
                   className="border-white/10 bg-white/4 hover:bg-white/8 text-white rounded-xl h-9 gap-1.5">
                   <Download className="w-3.5 h-3.5" />JSON
