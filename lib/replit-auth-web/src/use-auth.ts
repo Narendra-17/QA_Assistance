@@ -9,6 +9,7 @@ interface AuthState {
   isAuthenticated: boolean;
   login: () => void;
   logout: () => void;
+  refetch: () => Promise<void>;
 }
 
 function getAppBase(): string {
@@ -21,6 +22,19 @@ function getAppBase(): string {
 export function useAuth(): AuthState {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  const fetchUser = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/user", { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { user: AuthUser | null };
+      setUser(data.user ?? null);
+    } catch {
+      setUser(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,7 +68,12 @@ export function useAuth(): AuthState {
   }, []);
 
   const logout = useCallback(() => {
-    fetch("/api/auth/logout", { method: "POST", credentials: "include" })
+    fetch("/api/auth/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+      credentials: "include",
+    })
       .catch(() => {})
       .finally(() => {
         const base = getAppBase();
@@ -62,11 +81,16 @@ export function useAuth(): AuthState {
       });
   }, []);
 
+  const refetch = useCallback(async () => {
+    await fetchUser();
+  }, [fetchUser]);
+
   return {
     user,
     isLoading,
     isAuthenticated: !!user,
     login,
     logout,
+    refetch,
   };
 }

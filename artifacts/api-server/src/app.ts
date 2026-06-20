@@ -106,11 +106,16 @@ app.use(express.json({ limit: "1mb" }));
 // JSON-only API and URL-encoded bodies would be unused attack surface.
 
 // ── Enforce Content-Type on mutation endpoints ────────────────────────────────
-// Reject any POST/PUT/PATCH that does not declare an acceptable content type.
-// Checking `ct &&` (old approach) accidentally allowed requests with a missing
-// Content-Type header to bypass this check — fixed by always evaluating.
+// Reject any POST/PUT/PATCH that carries a body but does not declare an
+// acceptable content type.  Body-less requests (no Content-Length, no
+// Transfer-Encoding) are allowed through — e.g. POST /auth/logout has no body.
 app.use((req: Request, res: Response, next: NextFunction) => {
   if (["POST", "PUT", "PATCH"].includes(req.method)) {
+    const contentLength = req.headers["content-length"];
+    const hasBody = contentLength !== undefined
+      ? parseInt(contentLength, 10) > 0
+      : !!req.headers["transfer-encoding"];
+    if (!hasBody) return next();
     const ct = req.headers["content-type"] ?? "";
     const isJson = ct.includes("application/json");
     const isMultipart = ct.includes("multipart/form-data");
@@ -162,6 +167,12 @@ const authLimiter = rateLimit({
 });
 app.post("/api/auth/register", authLimiter);
 app.post("/api/auth/login", authLimiter);
+app.post("/api/auth/forgot-password", authLimiter);
+app.post("/api/auth/reset-password", authLimiter);
+app.post("/api/auth/mfa/setup", authLimiter);
+app.post("/api/auth/mfa/enable", authLimiter);
+app.post("/api/auth/mfa/disable", authLimiter);
+app.post("/api/auth/mfa/verify", authLimiter);
 
 // ── Authentication ────────────────────────────────────────────────────────────
 app.use(authMiddleware);

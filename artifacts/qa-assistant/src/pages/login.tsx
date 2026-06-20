@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ShieldCheck, Mail, Lock, Eye, EyeOff, Loader2, ArrowRight, AlertCircle,
-  Shield, Zap, Globe,
+  Shield, Zap, Globe, SmartphoneNfc, ChevronLeft,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePageTitle } from "@/hooks/use-page-title";
@@ -33,6 +33,13 @@ export default function Login() {
   const [emailFocused, setEmailFocused] = useState(false);
   const [pwFocused, setPwFocused]       = useState(false);
 
+  // MFA step
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaToken, setMfaToken]       = useState("");
+  const [mfaCode, setMfaCode]         = useState("");
+  const [mfaFocused, setMfaFocused]   = useState(false);
+  const [mfaLoading, setMfaLoading]   = useState(false);
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError("");
@@ -44,9 +51,14 @@ export default function Login() {
         credentials: "include",
         body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
       });
-      const data = await res.json() as { error?: string };
+      const data = await res.json() as { error?: string; requiresMfa?: boolean; mfaToken?: string };
       if (!res.ok) {
         setError(data.error ?? "Login failed. Please try again.");
+        return;
+      }
+      if (data.requiresMfa && data.mfaToken) {
+        setMfaToken(data.mfaToken);
+        setMfaRequired(true);
         return;
       }
       window.location.href = getAppBase() + "/";
@@ -54,6 +66,31 @@ export default function Login() {
       setError("Something went wrong. Please try again.");
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function handleMfaSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!mfaCode.trim()) return;
+    setError("");
+    setMfaLoading(true);
+    try {
+      const res = await fetch("/api/auth/mfa/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ mfaToken, code: mfaCode.trim() }),
+      });
+      const data = await res.json() as { error?: string };
+      if (!res.ok) {
+        setError(data.error ?? "Invalid code. Please try again.");
+        return;
+      }
+      window.location.href = getAppBase() + "/";
+    } catch {
+      setError("Something went wrong. Please try again.");
+    } finally {
+      setMfaLoading(false);
     }
   }
 
@@ -75,11 +112,8 @@ export default function Login() {
 
       {/* Floating security icons */}
       {FLOATING_ICONS.map(({ Icon, x, y, size, delay, dur }, i) => (
-        <div
-          key={i}
-          className="absolute pointer-events-none z-0 text-violet-500/10"
-          style={{ left: x, top: y, animation: `float ${dur}s ease-in-out ${delay}s infinite` }}
-        >
+        <div key={i} className="absolute pointer-events-none z-0 text-violet-500/10"
+          style={{ left: x, top: y, animation: `float ${dur}s ease-in-out ${delay}s infinite` }}>
           <Icon style={{ width: size, height: size }} />
         </div>
       ))}
@@ -118,123 +152,236 @@ export default function Login() {
           <div className="absolute top-0 left-1/2 -translate-x-1/2 w-3/4 h-px"
             style={{ background: "linear-gradient(90deg, transparent, rgba(139,92,246,0.35), transparent)" }} />
 
-          <div className="mb-7">
-            <h1 className="font-display font-bold text-2xl text-white mb-1.5">Welcome back</h1>
-            <p className="text-zinc-500 text-sm">Sign in to your account to continue</p>
-          </div>
-
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
-            {/* Email */}
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">
-                Email address
-              </label>
-              <div
-                className="relative transition-all duration-200"
-                style={{
-                  borderRadius: "0.75rem",
-                  boxShadow: emailFocused ? "0 0 0 1px rgba(139,92,246,0.4), 0 4px 20px rgba(139,92,246,0.08)" : "none",
-                }}
+          <AnimatePresence mode="wait">
+            {/* ── MFA step ── */}
+            {mfaRequired ? (
+              <motion.div
+                key="mfa"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                transition={{ duration: 0.3 }}
               >
-                <Mail className={`absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 transition-colors ${emailFocused ? "text-violet-400" : "text-zinc-600"}`} />
-                <input
-                  type="email"
-                  autoComplete="email"
-                  required
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  onFocus={() => setEmailFocused(true)}
-                  onBlur={() => setEmailFocused(false)}
-                  placeholder="you@example.com"
-                  className="w-full pl-11 pr-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white placeholder-zinc-600 text-sm focus:outline-none focus:border-violet-500/50 focus:bg-white/[0.06] transition-all"
-                />
-              </div>
-            </div>
+                <div className="flex items-center gap-3 mb-7">
+                  <div className="w-10 h-10 rounded-xl bg-violet-500/14 border border-violet-500/25 flex items-center justify-center shrink-0">
+                    <SmartphoneNfc className="w-5 h-5 text-violet-400" />
+                  </div>
+                  <div>
+                    <h1 className="font-display font-bold text-xl text-white">Two-factor verification</h1>
+                    <p className="text-zinc-500 text-xs mt-0.5">Enter the 6-digit code from your authenticator app</p>
+                  </div>
+                </div>
 
-            {/* Password */}
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">
-                Password
-              </label>
-              <div
-                className="relative transition-all duration-200"
-                style={{
-                  borderRadius: "0.75rem",
-                  boxShadow: pwFocused ? "0 0 0 1px rgba(139,92,246,0.4), 0 4px 20px rgba(139,92,246,0.08)" : "none",
-                }}
+                <form onSubmit={handleMfaSubmit} className="flex flex-col gap-4" noValidate>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">
+                      Authenticator code
+                    </label>
+                    <div
+                      className="relative transition-all duration-200"
+                      style={{
+                        borderRadius: "0.75rem",
+                        boxShadow: mfaFocused ? "0 0 0 1px rgba(139,92,246,0.4), 0 4px 20px rgba(139,92,246,0.08)" : "none",
+                      }}
+                    >
+                      <SmartphoneNfc className={`absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 transition-colors ${mfaFocused ? "text-violet-400" : "text-zinc-600"}`} />
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        maxLength={8}
+                        autoFocus
+                        value={mfaCode}
+                        onChange={e => setMfaCode(e.target.value.replace(/\D/g, ""))}
+                        onFocus={() => setMfaFocused(true)}
+                        onBlur={() => setMfaFocused(false)}
+                        placeholder="000000"
+                        className="w-full pl-11 pr-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white placeholder-zinc-600 text-sm font-mono tracking-[0.25em] text-center focus:outline-none focus:border-violet-500/50 focus:bg-white/[0.06] transition-all"
+                      />
+                    </div>
+                    <p className="text-[11px] text-zinc-600 mt-0.5">
+                      Can't access your app? Use one of your <span className="text-zinc-500">backup codes</span> instead.
+                    </p>
+                  </div>
+
+                  <AnimatePresence>
+                    {error && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl bg-red-500/10 border border-red-500/22 text-red-400 text-sm"
+                      >
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        {error}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <button
+                    type="submit"
+                    disabled={mfaLoading || mfaCode.length < 6}
+                    className="relative w-full h-12 rounded-xl font-semibold text-white overflow-hidden transition-all mt-1 disabled:opacity-55 disabled:cursor-not-allowed group"
+                    style={{
+                      background: "linear-gradient(135deg, hsl(258,85%,60%), hsl(258,85%,52%))",
+                      boxShadow: (!mfaLoading && mfaCode.length >= 6) ? "0 4px 24px rgba(139,92,246,0.4), 0 1px 0 rgba(255,255,255,0.1) inset" : "none",
+                    }}
+                  >
+                    <span className="absolute inset-y-0 left-0 w-[40%] bg-gradient-to-r from-transparent via-white/12 to-transparent -translate-x-full group-hover:translate-x-[300%] transition-transform duration-700 ease-in-out" />
+                    <span className="relative flex items-center justify-center gap-2">
+                      {mfaLoading
+                        ? <><Loader2 className="w-4 h-4 animate-spin" />Verifying…</>
+                        : <><ArrowRight className="w-4 h-4" />Verify</>}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => { setMfaRequired(false); setMfaToken(""); setMfaCode(""); setError(""); }}
+                    className="flex items-center justify-center gap-1.5 w-full text-sm text-zinc-600 hover:text-zinc-400 transition-colors py-1"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                    Back to sign in
+                  </button>
+                </form>
+              </motion.div>
+            ) : (
+              /* ── Password step ── */
+              <motion.div
+                key="password"
+                initial={{ opacity: 1 }}
+                exit={{ opacity: 0, x: -20 }}
+                transition={{ duration: 0.3 }}
               >
-                <Lock className={`absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 transition-colors ${pwFocused ? "text-violet-400" : "text-zinc-600"}`} />
-                <input
-                  type={showPassword ? "text" : "password"}
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  onFocus={() => setPwFocused(true)}
-                  onBlur={() => setPwFocused(false)}
-                  placeholder="••••••••"
-                  className="w-full pl-11 pr-11 py-3 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white placeholder-zinc-600 text-sm focus:outline-none focus:border-violet-500/50 focus:bg-white/[0.06] transition-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPw(v => !v)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-300 transition-colors"
-                  tabIndex={-1}
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
+                <div className="mb-7">
+                  <h1 className="font-display font-bold text-2xl text-white mb-1.5">Welcome back</h1>
+                  <p className="text-zinc-500 text-sm">Sign in to your account to continue</p>
+                </div>
 
-            {/* Error */}
-            <AnimatePresence>
-              {error && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0, scale: 0.97 }}
-                  animate={{ opacity: 1, height: "auto", scale: 1 }}
-                  exit={{ opacity: 0, height: 0, scale: 0.97 }}
-                  transition={{ duration: 0.2 }}
-                  className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl bg-red-500/10 border border-red-500/22 text-red-400 text-sm"
-                >
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  {error}
-                </motion.div>
-              )}
-            </AnimatePresence>
+                <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
+                  {/* Email */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">
+                      Email address
+                    </label>
+                    <div
+                      className="relative transition-all duration-200"
+                      style={{
+                        borderRadius: "0.75rem",
+                        boxShadow: emailFocused ? "0 0 0 1px rgba(139,92,246,0.4), 0 4px 20px rgba(139,92,246,0.08)" : "none",
+                      }}
+                    >
+                      <Mail className={`absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 transition-colors ${emailFocused ? "text-violet-400" : "text-zinc-600"}`} />
+                      <input
+                        type="email"
+                        autoComplete="email"
+                        required
+                        value={email}
+                        onChange={e => setEmail(e.target.value)}
+                        onFocus={() => setEmailFocused(true)}
+                        onBlur={() => setEmailFocused(false)}
+                        placeholder="you@example.com"
+                        className="w-full pl-11 pr-4 py-3 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white placeholder-zinc-600 text-sm focus:outline-none focus:border-violet-500/50 focus:bg-white/[0.06] transition-all"
+                      />
+                    </div>
+                  </div>
 
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={isLoading || !email || !password}
-              className="relative w-full h-12 rounded-xl font-semibold text-white overflow-hidden transition-all mt-1 disabled:opacity-55 disabled:cursor-not-allowed group"
-              style={{
-                background: "linear-gradient(135deg, hsl(258,85%,60%), hsl(258,85%,52%))",
-                boxShadow: (!isLoading && email && password)
-                  ? "0 4px 24px rgba(139,92,246,0.4), 0 1px 0 rgba(255,255,255,0.1) inset"
-                  : "none",
-              }}
-            >
-              {/* Shimmer sweep */}
-              <span className="absolute inset-y-0 left-0 w-[40%] bg-gradient-to-r from-transparent via-white/12 to-transparent -translate-x-full group-hover:translate-x-[300%] transition-transform duration-700 ease-in-out" />
-              <span className="relative flex items-center justify-center gap-2">
-                {isLoading
-                  ? <><Loader2 className="w-4 h-4 animate-spin" />Signing in…</>
-                  : <><ArrowRight className="w-4 h-4" />Sign In</>}
-              </span>
-            </button>
-          </form>
+                  {/* Password */}
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">
+                        Password
+                      </label>
+                      <Link
+                        href="/forgot-password"
+                        className="text-[11px] text-zinc-600 hover:text-violet-400 transition-colors font-medium"
+                      >
+                        Forgot password?
+                      </Link>
+                    </div>
+                    <div
+                      className="relative transition-all duration-200"
+                      style={{
+                        borderRadius: "0.75rem",
+                        boxShadow: pwFocused ? "0 0 0 1px rgba(139,92,246,0.4), 0 4px 20px rgba(139,92,246,0.08)" : "none",
+                      }}
+                    >
+                      <Lock className={`absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 transition-colors ${pwFocused ? "text-violet-400" : "text-zinc-600"}`} />
+                      <input
+                        type={showPassword ? "text" : "password"}
+                        autoComplete="current-password"
+                        required
+                        value={password}
+                        onChange={e => setPassword(e.target.value)}
+                        onFocus={() => setPwFocused(true)}
+                        onBlur={() => setPwFocused(false)}
+                        placeholder="••••••••"
+                        className="w-full pl-11 pr-11 py-3 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white placeholder-zinc-600 text-sm focus:outline-none focus:border-violet-500/50 focus:bg-white/[0.06] transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPw(v => !v)}
+                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-300 transition-colors"
+                        tabIndex={-1}
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Error */}
+                  <AnimatePresence>
+                    {error && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0, scale: 0.97 }}
+                        animate={{ opacity: 1, height: "auto", scale: 1 }}
+                        exit={{ opacity: 0, height: 0, scale: 0.97 }}
+                        transition={{ duration: 0.2 }}
+                        className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl bg-red-500/10 border border-red-500/22 text-red-400 text-sm"
+                      >
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        {error}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {/* Submit */}
+                  <button
+                    type="submit"
+                    disabled={isLoading || !email || !password}
+                    className="relative w-full h-12 rounded-xl font-semibold text-white overflow-hidden transition-all mt-1 disabled:opacity-55 disabled:cursor-not-allowed group"
+                    style={{
+                      background: "linear-gradient(135deg, hsl(258,85%,60%), hsl(258,85%,52%))",
+                      boxShadow: (!isLoading && email && password)
+                        ? "0 4px 24px rgba(139,92,246,0.4), 0 1px 0 rgba(255,255,255,0.1) inset"
+                        : "none",
+                    }}
+                  >
+                    <span className="absolute inset-y-0 left-0 w-[40%] bg-gradient-to-r from-transparent via-white/12 to-transparent -translate-x-full group-hover:translate-x-[300%] transition-transform duration-700 ease-in-out" />
+                    <span className="relative flex items-center justify-center gap-2">
+                      {isLoading
+                        ? <><Loader2 className="w-4 h-4 animate-spin" />Signing in…</>
+                        : <><ArrowRight className="w-4 h-4" />Sign In</>}
+                    </span>
+                  </button>
+                </form>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Footer */}
-        <p className="text-center text-zinc-600 text-sm mt-5">
-          Don't have an account?{" "}
-          <Link
-            href="/register"
-            className="text-violet-400 hover:text-violet-300 font-semibold transition-colors underline-offset-2 hover:underline"
-          >
-            Create one free
-          </Link>
-        </p>
+        {!mfaRequired && (
+          <p className="text-center text-zinc-600 text-sm mt-5">
+            Don't have an account?{" "}
+            <Link
+              href="/register"
+              className="text-violet-400 hover:text-violet-300 font-semibold transition-colors underline-offset-2 hover:underline"
+            >
+              Create one free
+            </Link>
+          </p>
+        )}
       </motion.div>
     </div>
   );

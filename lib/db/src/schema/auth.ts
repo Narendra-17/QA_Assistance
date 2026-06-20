@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, jsonb, pgTable, timestamp, varchar } from "drizzle-orm/pg-core";
+import { boolean, index, jsonb, pgTable, timestamp, varchar } from "drizzle-orm/pg-core";
 
 export const sessionsTable = pgTable(
   "sessions",
@@ -20,6 +20,11 @@ export const usersTable = pgTable("users", {
   passwordHash: varchar("password_hash"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
+  passwordResetToken: varchar("password_reset_token"),
+  passwordResetExpires: timestamp("password_reset_expires", { withTimezone: true }),
+  mfaSecret: varchar("mfa_secret"),
+  mfaEnabled: boolean("mfa_enabled").default(false).notNull(),
+  mfaBackupCodes: varchar("mfa_backup_codes"),
 });
 
 export type UpsertUser = typeof usersTable.$inferInsert;

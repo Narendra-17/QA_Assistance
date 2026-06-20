@@ -93,3 +93,40 @@ export function getSessionId(req: Request): string | undefined {
   const cookieVal = req.cookies?.[SESSION_COOKIE];
   return typeof cookieVal === "string" && isValidSessionId(cookieVal) ? cookieVal : undefined;
 }
+
+// ── MFA temporary sessions ────────────────────────────────────────────────────
+// Stores pre-auth sessions for users with MFA enabled.
+// After successful password verification the server issues a short-lived (5-min)
+// mfaToken; the client must then supply a valid TOTP code to upgrade it into a
+// full session.  These entries live only in memory and are never persisted.
+
+interface MfaPendingEntry {
+  sessionData: SessionData;
+  expires: number;
+}
+
+const mfaPending = new Map<string, MfaPendingEntry>();
+
+// Prune expired entries every 5 minutes to avoid unbounded growth
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of mfaPending) {
+    if (entry.expires < now) mfaPending.delete(key);
+  }
+}, 5 * 60 * 1000);
+
+export function createMfaToken(sessionData: SessionData): string {
+  const token = crypto.randomBytes(32).toString("hex");
+  mfaPending.set(token, { sessionData, expires: Date.now() + 5 * 60 * 1000 });
+  return token;
+}
+
+export function consumeMfaToken(token: string): SessionData | null {
+  const entry = mfaPending.get(token);
+  if (!entry || entry.expires < Date.now()) {
+    mfaPending.delete(token);
+    return null;
+  }
+  mfaPending.delete(token);
+  return entry.sessionData;
+}

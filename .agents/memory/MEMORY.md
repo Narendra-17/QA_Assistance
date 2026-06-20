@@ -1,0 +1,1 @@
+- [otplib + qrcode bundling](otplib-bundling.md) — must be externalized in build.mjs and loaded via createRequire; named ESM imports fail with esbuild.
