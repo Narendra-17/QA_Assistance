@@ -1,1 +1,2 @@
 - [otplib + qrcode bundling](otplib-bundling.md) — must be externalized in build.mjs and loaded via createRequire; named ESM imports fail with esbuild.
+- [lib/db composite rebuild](db-composite-rebuild.md) — after any schema change in lib/db/src/schema/, run `cd lib/db && npx tsc --build` or api-server typecheck will report stale "property doesn't exist" errors.

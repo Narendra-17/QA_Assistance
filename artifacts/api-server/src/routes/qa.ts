@@ -755,24 +755,22 @@ router.get("/runs", async (req: Request, res: Response) => {
         projectName: qaRunsTable.projectName, status: qaRunsTable.status,
         errorMessage: qaRunsTable.errorMessage, createdAt: qaRunsTable.createdAt,
         updatedAt: qaRunsTable.updatedAt, report: qaRunsTable.report,
+        pinned: qaRunsTable.pinned,
       })
       .from(qaRunsTable)
       .where(eq(qaRunsTable.userId, userId))
       .orderBy(desc(qaRunsTable.createdAt));
 
-    // Return only a minimal report summary so the dashboard can show scores/severity bars
+    // Flatten report summary so the dashboard can show scores/severity bars
     // without sending full issue descriptions across the wire.
+    // Top-level `score`, `issues`, and `pinned` are all included for the dashboard.
     const runs = rawRuns.map(r => {
-      const rep = r.report as { overallScore?: number; issues?: Array<{ severity: string }> } | null;
+      const rep = r.report as { overallScore?: number; issues?: Array<{ severity: string; owasp?: string | null }> } | null;
       const { report: _rep, ...rest } = r;
       return {
         ...rest,
-        report: rep
-          ? {
-              overallScore: rep.overallScore ?? 0,
-              issues: (rep.issues ?? []).map((i: { severity: string; owasp?: string | null }) => ({ severity: i.severity, owasp: i.owasp ?? null })),
-            }
-          : null,
+        score: rep?.overallScore ?? null,
+        issues: rep ? (rep.issues ?? []).map((i) => ({ severity: i.severity, owasp: i.owasp ?? null })) : null,
       };
     });
     res.json({ runs });
