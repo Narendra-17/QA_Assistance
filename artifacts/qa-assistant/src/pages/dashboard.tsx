@@ -8,7 +8,7 @@ import {
   Plus, Trash2, Globe, FileCode2, AlertTriangle, TrendingUp,
   Activity, Loader2, Search, ShieldAlert, CheckCircle2, RotateCcw,
   ArrowUpDown, Star, Download, SquareCheck, Square, RotateCw, X,
-  ChevronDown,
+  ChevronDown, Pencil, AlertCircle,
 } from "lucide-react";
 import { usePageTitle } from "@/hooks/use-page-title";
 import {
@@ -368,6 +368,8 @@ export default function Dashboard() {
   const [pinningId,   setPinningId]   = useState<string | null>(null);
   const [rescanningId, setRescanningId] = useState<string | null>(null);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [renamingId,  setRenamingId]  = useState<string | null>(null);
+  const [renameVal,   setRenameVal]   = useState("");
   const [, setLocation] = useLocation();
 
   const { data, isLoading, refetch }                           = useListQaRuns();
@@ -491,6 +493,27 @@ export default function Dashboard() {
       toast.error(err instanceof Error ? err.message : "Re-scan failed");
     } finally {
       setRescanningId(null);
+    }
+  }
+
+  async function handleRename(id: string) {
+    const trimmed = renameVal.trim();
+    try {
+      const r = await fetch(`${BASE}/api/qa/runs/${id}/label`, {
+        method: "PATCH", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: trimmed }),
+      });
+      if (!r.ok) throw new Error("Failed");
+      queryClient.setQueryData(getListQaRunsQueryKey(), (old: { runs: QaRunExtended[] } | undefined) => {
+        if (!old) return old;
+        return { ...old, runs: old.runs.map(run => run.id === id ? { ...run, projectName: trimmed || null } : run) };
+      });
+      toast.success(trimmed ? "Label saved" : "Label cleared");
+    } catch {
+      toast.error("Failed to save label");
+    } finally {
+      setRenamingId(null);
     }
   }
 
@@ -659,6 +682,41 @@ export default function Dashboard() {
             icon={ShieldAlert} color="#06B6D4" loading={statsLoading}
           />
         </motion.div>
+
+        {/* ── Quota warning ── */}
+        {!statsLoading && (() => {
+          const total   = stats?.totalRuns ?? 0;
+          const MAX     = 500;
+          const pct     = Math.min(100, Math.round((total / MAX) * 100));
+          const isWarn  = total >= 400 && total < 475;
+          const isCrit  = total >= 475;
+          if (!isWarn && !isCrit) return null;
+          return (
+            <motion.div variants={ITEM} initial="hidden" animate="show"
+              className="flex items-center gap-3 px-4 py-3 rounded-2xl border"
+              style={{
+                background: isCrit ? "rgba(239,68,68,0.07)" : "rgba(245,158,11,0.07)",
+                borderColor: isCrit ? "rgba(239,68,68,0.25)" : "rgba(245,158,11,0.25)",
+              }}>
+              <AlertCircle className={["w-4 h-4 shrink-0", isCrit ? "text-red-400" : "text-amber-400"].join(" ")} />
+              <div className="flex-1 min-w-0">
+                <p className={["text-sm font-semibold", isCrit ? "text-red-300" : "text-amber-300"].join(" ")}>
+                  {isCrit ? "Storage limit almost reached" : "Approaching storage limit"}
+                </p>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  {total} / {MAX} runs used — consider deleting old scans to stay under the limit.
+                </p>
+              </div>
+              <div className="shrink-0 flex items-center gap-2">
+                <div className="w-24 h-1.5 rounded-full bg-white/6 overflow-hidden">
+                  <div className="h-full rounded-full transition-all"
+                    style={{ width: `${pct}%`, background: isCrit ? "#EF4444" : "#F59E0B" }} />
+                </div>
+                <span className={["text-xs font-mono font-bold", isCrit ? "text-red-400" : "text-amber-400"].join(" ")}>{pct}%</span>
+              </div>
+            </motion.div>
+          );
+        })()}
 
         {/* ── Score trend + OWASP breakdown ── */}
         {!statsLoading && (() => {
@@ -875,8 +933,10 @@ export default function Dashboard() {
               {runs.map((run) => {
                 const isUrl      = run.runType === "url";
                 const isRunning  = run.status === "running" || run.status === "pending";
-                const label      = run.appUrl ?? run.projectName ?? "Unnamed scan";
+                const isFailed   = run.status === "failed";
+                const label      = run.projectName ?? run.appUrl ?? "Unnamed scan";
                 const hasScore   = run.status === "completed" && run.score != null;
+                const isRenaming = renamingId === run.id;
                 const score      = run.score ?? 0;
                 const isSelected = selectedIds.has(run.id);
                 const isPinned   = !!run.pinned;
@@ -940,20 +1000,51 @@ export default function Dashboard() {
 
                       {/* Label + meta */}
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-medium text-white group-hover:text-violet-100 transition-colors truncate">{label}</span>
-                          {isPinned && !selectMode && (
-                            <Star className="w-3 h-3 text-amber-400 shrink-0 fill-amber-400" />
-                          )}
-                          {isRunning && <LiveElapsed startedAt={run.createdAt} />}
-                        </div>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-[11px] text-zinc-600">
-                            {formatDistanceToNow(new Date(run.createdAt), { addSuffix: true })}
-                          </span>
-                          <span className="text-zinc-700">·</span>
-                          <span className="text-[11px] text-zinc-600 font-mono uppercase">{run.runType}</span>
-                        </div>
+                        {isRenaming ? (
+                          <form
+                            onSubmit={e => { e.preventDefault(); void handleRename(run.id); }}
+                            className="flex items-center gap-1.5"
+                            onClick={e => e.stopPropagation()}
+                          >
+                            <input
+                              value={renameVal}
+                              onChange={e => setRenameVal(e.target.value)}
+                              maxLength={200}
+                              autoFocus
+                              placeholder={label}
+                              className="h-7 px-2 text-sm text-white bg-white/8 border border-violet-500/40 rounded-lg focus:outline-none focus:border-violet-500/70 min-w-[180px] max-w-xs"
+                              onKeyDown={e => { if (e.key === "Escape") setRenamingId(null); }}
+                            />
+                            <button type="submit"
+                              className="text-[11px] text-violet-400 hover:text-violet-200 font-medium px-2 py-1 rounded-lg hover:bg-violet-500/10 transition-colors">
+                              Save
+                            </button>
+                            <button type="button" onClick={e => { e.stopPropagation(); setRenamingId(null); }}
+                              className="text-[11px] text-zinc-600 hover:text-zinc-400 px-1.5 py-1 transition-colors">
+                              Cancel
+                            </button>
+                          </form>
+                        ) : (
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-medium text-white group-hover:text-violet-100 transition-colors truncate">{label}</span>
+                            {run.projectName && run.appUrl && (
+                              <span className="text-[10px] text-zinc-600 font-mono truncate hidden sm:block">{run.appUrl}</span>
+                            )}
+                            {isPinned && !selectMode && (
+                              <Star className="w-3 h-3 text-amber-400 shrink-0 fill-amber-400" />
+                            )}
+                            {isRunning && <LiveElapsed startedAt={run.createdAt} />}
+                          </div>
+                        )}
+                        {!isRenaming && (
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-[11px] text-zinc-600">
+                              {formatDistanceToNow(new Date(run.createdAt), { addSuffix: true })}
+                            </span>
+                            <span className="text-zinc-700">·</span>
+                            <span className="text-[11px] text-zinc-600 font-mono uppercase">{run.runType}</span>
+                          </div>
+                        )}
                       </div>
 
                       {/* Severity bar */}
@@ -979,8 +1070,17 @@ export default function Dashboard() {
                       <StatusBadge status={run.status as "pending" | "running" | "completed" | "failed"} />
 
                       {/* Action buttons (hidden in select mode) */}
-                      {!selectMode && (
+                      {!selectMode && !isRenaming && (
                         <div className="flex items-center gap-0.5 ml-1 opacity-0 group-hover:opacity-100 transition-all">
+                          {/* Rename button */}
+                          <button
+                            onClick={e => { e.stopPropagation(); e.preventDefault(); setRenameVal(run.projectName ?? ""); setRenamingId(run.id); }}
+                            className="p-1.5 rounded-lg text-zinc-700 hover:text-violet-400 transition-all hover:bg-violet-500/8"
+                            title="Rename / set label"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+
                           {/* Pin button */}
                           <button
                             onClick={(e) => handlePin(run.id, e)}
@@ -997,12 +1097,13 @@ export default function Dashboard() {
                               : <Star className={["w-3.5 h-3.5", isPinned ? "fill-amber-400" : ""].join(" ")} />}
                           </button>
 
-                          {/* Re-scan button (URL only) */}
-                          {run.runType === "url" && run.status === "completed" && (
+                          {/* Re-scan button (URL only — completed or failed) */}
+                          {run.runType === "url" && (run.status === "completed" || isFailed) && (
                             <button
                               onClick={(e) => handleRescan(run.id, e)}
-                              className="p-1.5 rounded-lg text-zinc-700 hover:text-cyan-400 transition-all hover:bg-cyan-500/8"
-                              title="Re-scan with same URL"
+                              className={["p-1.5 rounded-lg transition-all hover:bg-cyan-500/8",
+                                isFailed ? "text-red-500 hover:text-cyan-400" : "text-zinc-700 hover:text-cyan-400"].join(" ")}
+                              title={isFailed ? "Retry this scan" : "Re-scan with same URL"}
                             >
                               {isRescanning
                                 ? <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" />

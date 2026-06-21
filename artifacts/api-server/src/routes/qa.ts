@@ -1185,7 +1185,13 @@ router.patch("/runs/:id/issues/:index/status", async (req: Request, res: Respons
   }
 
   const userId = (req.user as { id: string }).id;
-  const note = parsed.data.note ? sanitizeAndLimit(parsed.data.note, 500, "note") : null;
+
+  // Only update note if explicitly included in request body. This prevents a
+  // status-only change from accidentally wiping an existing note.
+  const hasNote = "note" in req.body;
+  const sanitizedNote = hasNote && parsed.data.note
+    ? sanitizeAndLimit(parsed.data.note, 500, "note")
+    : hasNote ? "" : undefined;
 
   // Verify run ownership
   const [run] = await db.select({ id: qaRunsTable.id })
@@ -1193,18 +1199,62 @@ router.patch("/runs/:id/issues/:index/status", async (req: Request, res: Respons
   if (!run) return void res.status(404).json({ error: "Run not found" });
 
   try {
-    // Atomic upsert — leverages the unique constraint on (runId, userId, issueIndex)
-    // so there is no race condition between a concurrent select and insert.
-    const [result] = await db.insert(issueStatusesTable)
-      .values({ runId: id, userId, issueIndex, status: parsed.data.status, note: note ?? undefined })
-      .onConflictDoUpdate({
-        target: [issueStatusesTable.runId, issueStatusesTable.userId, issueStatusesTable.issueIndex],
-        set: { status: parsed.data.status, note: note ?? undefined },
-      })
-      .returning();
+    // Atomic upsert — leverages the unique constraint on (runId, userId, issueIndex).
+    // When `note` is absent from the request body we exclude it from the SET clause
+    // so an existing note is preserved across status changes.
+    let result;
+    if (hasNote) {
+      [result] = await db.insert(issueStatusesTable)
+        .values({ runId: id, userId, issueIndex, status: parsed.data.status, note: sanitizedNote })
+        .onConflictDoUpdate({
+          target: [issueStatusesTable.runId, issueStatusesTable.userId, issueStatusesTable.issueIndex],
+          set: { status: parsed.data.status, note: sanitizedNote },
+        })
+        .returning();
+    } else {
+      [result] = await db.insert(issueStatusesTable)
+        .values({ runId: id, userId, issueIndex, status: parsed.data.status })
+        .onConflictDoUpdate({
+          target: [issueStatusesTable.runId, issueStatusesTable.userId, issueStatusesTable.issueIndex],
+          set: { status: parsed.data.status },
+        })
+        .returning();
+    }
     res.json(result);
   } catch {
     res.status(500).json({ error: "Failed to update issue status" });
+  }
+});
+
+// ─── Rename / label ──────────────────────────────────────────────────────────
+
+router.patch("/runs/:id/label", async (req: Request, res: Response) => {
+  if (!isAuthed(req)) {
+    logSecurityEvent("AUTH_MISSING", req, `PATCH /runs/${req.params.id}/label`);
+    return void res.status(401).json({ error: "Authentication required" });
+  }
+  const id = String(req.params.id);
+  if (!isValidUuid(id)) return void res.status(400).json({ error: "Invalid run ID format" });
+
+  const labelSchema = z.object({ label: z.string().trim().max(200) });
+  const parsed = labelSchema.safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ error: "Label must be 200 characters or fewer" });
+
+  const userId = (req.user as { id: string }).id;
+  const sanitized = sanitizeAndLimit(parsed.data.label, 200, "label");
+
+  try {
+    const [run] = await db.select({ id: qaRunsTable.id })
+      .from(qaRunsTable).where(and(eq(qaRunsTable.id, id), eq(qaRunsTable.userId, userId)));
+    if (!run) return void res.status(404).json({ error: "Run not found" });
+
+    await db.update(qaRunsTable)
+      .set({ projectName: sanitized || null })
+      .where(eq(qaRunsTable.id, id));
+
+    res.json({ label: sanitized || null });
+  } catch {
+    res.status(500).json({ error: "Failed to update label" });
   }
 });
 

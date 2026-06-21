@@ -7,6 +7,7 @@ import {
   TrendingUp, BarChart3, RotateCcw, RotateCw, ChevronDown, ChevronUp,
   Share2, FileText, Shield, Clock, Check, Eye, X, Zap,
   Wand2, Target, Swords, Layers, Search, Bell, History, ListFilter, ArrowUpDown,
+  Pencil, MessageSquare,
 } from "lucide-react";
 import { PieChart, Pie, Cell, Tooltip as RechartTooltip, ResponsiveContainer } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -417,16 +418,39 @@ function SeverityBar({ issues }: { issues: Issue[] }) {
 }
 
 function ProgressAnalysis({ isUrl, startedAt }: { isUrl: boolean; startedAt?: string }) {
-  const steps = isUrl
-    ? ["Fetching URL", "Parsing HTML", "Checking headers", "AI analysis", "Generating report"]
-    : ["Reading files", "Detecting secrets", "Scanning dependencies", "AI analysis", "Generating report"];
+  const STEPS = isUrl
+    ? [
+        { label: "Resolving URL & fetching content",      est: 4  },
+        { label: "Parsing HTML & extracting signals",     est: 5  },
+        { label: "Checking security headers & cookies",   est: 4  },
+        { label: "Running AI vulnerability analysis",     est: 18 },
+        { label: "Generating structured report",          est: 5  },
+      ]
+    : [
+        { label: "Reading & indexing source files",       est: 3  },
+        { label: "Detecting hardcoded secrets",           est: 4  },
+        { label: "Scanning dependency vulnerabilities",   est: 5  },
+        { label: "Running AI code analysis",              est: 20 },
+        { label: "Generating structured report",          est: 5  },
+      ];
+
   const [step, setStep]       = useState(0);
   const [elapsed, setElapsed] = useState(0);
 
+  // Advance through stages based on per-step estimated duration; stay on last step.
   useEffect(() => {
-    const interval = setInterval(() => setStep(s => (s + 1) % steps.length), 2800);
-    return () => clearInterval(interval);
-  }, [steps.length]);
+    const DURATIONS = STEPS.map(s => s.est * 1000);
+    let current = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    function advance() {
+      if (current < DURATIONS.length - 1) {
+        timer = setTimeout(() => { current++; setStep(current); advance(); }, DURATIONS[current]);
+      }
+    }
+    advance();
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isUrl]);
 
   useEffect(() => {
     const base = startedAt ? Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000) : 0;
@@ -438,36 +462,115 @@ function ProgressAnalysis({ isUrl, startedAt }: { isUrl: boolean; startedAt?: st
   const mins = Math.floor(elapsed / 60);
   const secs = elapsed % 60;
   const elapsedStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+  const totalEst   = STEPS.reduce((a, s) => a + s.est, 0);
+  const pct        = Math.min(100, Math.round(((step + 0.5) / STEPS.length) * 100));
 
   return (
-    <div className="text-center py-20 rounded-2xl border border-violet-500/12 bg-violet-500/4">
-      <div className="relative inline-flex mb-6">
-        <div className="absolute inset-0 bg-violet-500/20 rounded-2xl blur-lg animate-pulse" />
-        <div className="relative w-16 h-16 rounded-2xl bg-violet-500/15 border border-violet-500/25 flex items-center justify-center">
-          <Loader2 className="w-8 h-8 text-violet-400 animate-spin" />
+    <div className="rounded-2xl border border-violet-500/12 bg-violet-500/4 p-6">
+      {/* Header row */}
+      <div className="flex items-center gap-4 mb-5">
+        <div className="relative w-11 h-11 rounded-xl bg-violet-500/15 border border-violet-500/25 flex items-center justify-center shrink-0">
+          <div className="absolute inset-0 bg-violet-500/20 rounded-xl blur-lg animate-pulse" />
+          <Loader2 className="relative w-5 h-5 text-violet-400 animate-spin" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-display font-bold text-white mb-1.5">AI Analysis in Progress</p>
+          <div className="flex items-center gap-2">
+            <div className="flex-1 h-1 rounded-full bg-white/6 overflow-hidden">
+              <motion.div
+                className="h-full rounded-full"
+                style={{ background: "linear-gradient(90deg, #7C3AED, #8B5CF6)" }}
+                animate={{ width: `${pct}%` }}
+                transition={{ duration: 0.7, ease: "easeOut" }}
+              />
+            </div>
+            <span className="text-[11px] font-mono text-violet-400 tabular-nums shrink-0">{pct}%</span>
+          </div>
+        </div>
+        <div className="text-right shrink-0">
+          <span className="font-mono text-violet-300 text-sm font-semibold tabular-nums block">{elapsedStr}</span>
+          <span className="text-zinc-600 text-[10px]">~{totalEst}s est.</span>
         </div>
       </div>
-      <h3 className="text-lg font-display font-bold text-white mb-2">AI Analysis in Progress</h3>
-      <div className="flex items-center justify-center gap-2 mb-6">
-        <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
-        <AnimatePresence mode="wait">
-          <motion.p key={step} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
-            className="text-zinc-400 text-sm min-w-[220px]">
-            {steps[step]}…
-          </motion.p>
+
+      {/* Stage list */}
+      <div className="space-y-1">
+        {STEPS.map((s, i) => {
+          const isDone   = i < step;
+          const isActive = i === step;
+          return (
+            <div key={i}
+              className={["flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-300",
+                isActive ? "bg-violet-500/10 border border-violet-500/18" : "border border-transparent"].join(" ")}
+            >
+              <div className="w-4 h-4 flex items-center justify-center shrink-0">
+                {isDone
+                  ? <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  : isActive
+                    ? <Loader2 className="w-3.5 h-3.5 text-violet-400 animate-spin" />
+                    : <div className="w-1.5 h-1.5 rounded-full bg-white/12" />}
+              </div>
+              <span className={["text-sm transition-colors flex-1",
+                isDone ? "text-zinc-600 line-through decoration-zinc-700" : isActive ? "text-white font-medium" : "text-zinc-600"].join(" ")}>
+                {s.label}
+              </span>
+              {isDone && <span className="text-[10px] text-emerald-500/70 font-mono shrink-0">✓</span>}
+              {isActive && (
+                <div className="flex gap-0.5 shrink-0">
+                  {[0, 1, 2].map(d => (
+                    <div key={d} className="w-1 h-1 rounded-full bg-violet-400 animate-pulse"
+                      style={{ animationDelay: `${d * 0.22}s` }} />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Note textarea (auto-saves on change with debounce) ───────────────────────
+
+function NoteTextarea({ initialValue, onSave }: { initialValue: string; onSave: (v: string) => void }) {
+  const [value,  setValue]  = useState(initialValue);
+  const [saved,  setSaved]  = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => { setValue(initialValue); }, [initialValue]);
+
+  function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    const v = e.target.value;
+    setValue(v);
+    setSaved(false);
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => { onSave(v); setSaved(true); }, 900);
+  }
+
+  return (
+    <div className="relative">
+      <textarea
+        value={value}
+        onChange={handleChange}
+        onClick={e => e.stopPropagation()}
+        onKeyDown={e => e.stopPropagation()}
+        placeholder="Add a note — assignment, context, or follow-up…"
+        maxLength={500}
+        rows={2}
+        className="w-full resize-none bg-white/4 border border-white/8 rounded-xl px-3 py-2.5 text-sm text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-violet-500/35 transition-all"
+      />
+      <div className="flex items-center justify-between mt-1 px-0.5">
+        <AnimatePresence>
+          {saved && (
+            <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="text-[10px] text-emerald-400 flex items-center gap-1">
+              <CheckCircle2 className="w-2.5 h-2.5" />Saved
+            </motion.span>
+          )}
         </AnimatePresence>
+        <span className="text-[10px] text-zinc-700 ml-auto">{value.length}/500</span>
       </div>
-      <div className="flex justify-center gap-1.5 mb-4">
-        {steps.map((_, i) => (
-          <div key={i} className="h-1 rounded-full transition-all duration-500"
-            style={{ width: i === step ? 24 : 8, background: i <= step ? "#8B5CF6" : "rgba(255,255,255,0.1)" }} />
-        ))}
-      </div>
-      <div className="flex items-center justify-center gap-2 mb-1">
-        <span className="font-mono text-violet-400 text-sm font-semibold tabular-nums">{elapsedStr}</span>
-        <span className="text-zinc-600 text-xs">elapsed</span>
-      </div>
-      <p className="text-zinc-600 text-xs">This typically takes 20–40 seconds</p>
     </div>
   );
 }
@@ -1010,6 +1113,14 @@ export default function Report() {
     return map;
   }, [statusData]);
 
+  const noteMap = useMemo(() => {
+    const map: Record<number, string> = {};
+    for (const s of statusData?.statuses ?? []) {
+      if (s.note) map[s.issueIndex] = s.note;
+    }
+    return map;
+  }, [statusData]);
+
   const updateStatusMutation = useMutation({
     mutationFn: async ({ index, status }: { index: number; status: IssueStatus["status"] }) => {
       const resp = await fetch(`/api/qa/runs/${id}/issues/${index}/status`, {
@@ -1301,6 +1412,49 @@ export default function Report() {
     updateStatusMutation.mutate({ index, status });
   }
 
+  const saveNote = useCallback(async (issueIndex: number, note: string) => {
+    const currentStatus = issueStatusMap[issueIndex] ?? "open";
+    try {
+      await fetch(`/api/qa/runs/${id}/issues/${issueIndex}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: currentStatus, note }),
+      });
+      void refetchStatuses();
+    } catch {
+      toast.error("Failed to save note");
+    }
+  }, [id, issueStatusMap, refetchStatuses]);
+
+  // ── Rename / label ─────────────────────────────────────────────────────────
+  const [renaming,    setRenaming]    = useState(false);
+  const [renameVal,   setRenameVal]   = useState("");
+  const [labelOverride, setLabelOverride] = useState<string | null | undefined>(undefined);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleRename() {
+    if (!run) return;
+    const trimmed = renameVal.trim();
+    try {
+      await fetch(`/api/qa/runs/${id}/label`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: trimmed }),
+      });
+      // Optimistic local update — no need to refetch
+      setLabelOverride(trimmed || null);
+      toast.success(trimmed ? "Label saved" : "Label cleared");
+    } catch {
+      toast.error("Failed to save label");
+    } finally {
+      setRenaming(false);
+    }
+  }
+
+  const effectiveLabel = labelOverride !== undefined
+    ? (labelOverride ?? run?.appUrl ?? "Assessment")
+    : (run?.projectName ?? run?.appUrl ?? "Assessment");
+
   // Dynamic page title
   const pageTitle = useMemo(() => {
     if (!run) return "Report";
@@ -1377,10 +1531,49 @@ export default function Report() {
                   : <FileCode2 className="relative w-4.5 h-4.5 text-cyan-400" />}
               </div>
               <div>
-                <div className="flex items-center gap-2 mb-0.5">
-                  <h1 className="text-lg font-display font-bold text-white leading-tight max-w-lg truncate">
-                    {run.appUrl ?? run.projectName ?? "Assessment"}
-                  </h1>
+                <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                  {renaming ? (
+                    <form
+                      onSubmit={e => { e.preventDefault(); void handleRename(); }}
+                      className="flex items-center gap-2"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      <input
+                        ref={renameInputRef}
+                        value={renameVal}
+                        onChange={e => setRenameVal(e.target.value)}
+                        maxLength={200}
+                        autoFocus
+                        placeholder={effectiveLabel}
+                        className="h-8 px-2.5 text-sm font-semibold text-white bg-white/6 border border-violet-500/35 rounded-lg focus:outline-none focus:border-violet-500/70 min-w-[240px]"
+                        onKeyDown={e => { if (e.key === "Escape") { setRenaming(false); } }}
+                      />
+                      <button type="submit"
+                        className="text-[11px] text-violet-400 hover:text-violet-200 font-medium px-2 py-1 rounded-lg hover:bg-violet-500/10 transition-colors">
+                        Save
+                      </button>
+                      <button type="button" onClick={() => setRenaming(false)}
+                        className="text-[11px] text-zinc-600 hover:text-zinc-400 px-1.5 py-1 rounded-lg transition-colors">
+                        Cancel
+                      </button>
+                    </form>
+                  ) : (
+                    <div className="flex items-center gap-2 group/rename">
+                      <h1 className="text-lg font-display font-bold text-white leading-tight max-w-lg truncate">
+                        {effectiveLabel}
+                      </h1>
+                      {(labelOverride ?? run.projectName) && isUrl && (
+                        <span className="text-[11px] text-zinc-600 font-mono truncate max-w-[200px]">{run.appUrl}</span>
+                      )}
+                      <button
+                        onClick={() => { setRenameVal(run.projectName ?? ""); setRenaming(true); }}
+                        className="opacity-0 group-hover/rename:opacity-100 p-1 rounded-lg text-zinc-600 hover:text-zinc-300 hover:bg-white/6 transition-all shrink-0"
+                        title="Rename this run"
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                    </div>
+                  )}
                   <span className={["hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border",
                     isUrl
                       ? "bg-violet-500/10 border-violet-500/25 text-violet-300"
@@ -1936,6 +2129,18 @@ export default function Report() {
                                     <pre className="code-block text-zinc-300 text-[11px]">{issue.codeSnippet}</pre>
                                   </div>
                                 )}
+
+                                {/* Issue Note */}
+                                <div className="border-t pt-3" style={{ borderColor: cfg.border }}>
+                                  <div className="flex items-center gap-1.5 mb-2">
+                                    <MessageSquare className="w-3 h-3 text-zinc-500" />
+                                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Note</p>
+                                  </div>
+                                  <NoteTextarea
+                                    initialValue={noteMap[actualIndex] ?? ""}
+                                    onSave={(note) => saveNote(actualIndex, note)}
+                                  />
+                                </div>
 
                                 {/* AI-Generated Code Fix */}
                                 <div className="border-t pt-3" style={{ borderColor: cfg.border }}>

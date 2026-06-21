@@ -1,2 +1,5 @@
 - [otplib + qrcode bundling](otplib-bundling.md) — must be externalized in build.mjs and loaded via createRequire; named ESM imports fail with esbuild.
 - [lib/db composite rebuild](db-composite-rebuild.md) — after any schema change in lib/db/src/schema/, run `cd lib/db && npx tsc --build` or api-server typecheck will report stale "property doesn't exist" errors.
+- [Issue status upsert note preservation](issue-status-notes.md) — PATCH /runs/:id/issues/:index/status uses two separate upsert branches (hasNote/!hasNote) so status-only changes never wipe existing notes. The `note` column lives in issueStatusesTable and is returned by GET /runs/:id/issue-statuses.
+- [Run rename endpoint](run-rename.md) — PATCH /runs/:id/label stores a custom display name in `projectName` (safe: null for URL runs by default). Label display order: projectName ?? appUrl ?? fallback. Optimistic local update via useState labelOverride avoids needing the generated query key.
+- [React 18 useRef type](react18-useref.md) — useRef<T>() with no argument fails TS strict mode; must use useRef<T | undefined>(undefined).
