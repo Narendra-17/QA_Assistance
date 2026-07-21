@@ -25,7 +25,10 @@ export async function sendPasswordResetEmail(
   resetUrl: string,
 ): Promise<boolean> {
   if (!transporter) {
-    logger.info({ to, resetUrl }, "SMTP not configured — password reset URL logged for development");
+    // Redact the token from the URL before logging to avoid leaking credentials
+    // even in development logs. The URL contains a one-time token — never log it.
+    const redactedUrl = resetUrl.replace(/token=[^&]+/, "token=REDACTED");
+    logger.info({ to, resetUrl: redactedUrl }, "SMTP not configured — password reset email not sent (development mode)");
     return false;
   }
 

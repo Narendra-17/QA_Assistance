@@ -25,6 +25,8 @@ const Report         = lazy(() => import("@/pages/report"));
 const SharedReport   = lazy(() => import("@/pages/shared-report"));
 const Integrations   = lazy(() => import("@/pages/integrations"));
 const Settings       = lazy(() => import("@/pages/settings"));
+const Terms          = lazy(() => import("@/pages/terms"));
+const Privacy        = lazy(() => import("@/pages/privacy"));
 
 function UrlTestPage() { return <NewRun initialTab="url"  />; }
 function SastPage()    { return <NewRun initialTab="sast" />; }

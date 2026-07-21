@@ -20,18 +20,49 @@ import { detectSecrets, secretsToIssues } from "../lib/secrets-detector";
 import { scanDependencies, scaToIssues } from "../lib/sca-scanner";
 import { apiKeyAuth } from "../lib/api-key-auth";
 import { buildSarif } from "../lib/sarif";
+import { logger } from "../lib/logger";
 
 const router = Router();
 
 // ─── Per-user limits ──────────────────────────────────────────────────────────
 const MAX_RUNS_PER_USER = 500;
+// Hourly scan cap prevents runaway AI API costs if an account is compromised
+// or a user accidentally triggers a scan loop.
+const MAX_HOURLY_SCANS_PER_USER = 10;
 // Cap individual file content sent to the AI: limits prompt-injection surface
 // and prevents context-window overflow (~5k tokens per file at ~4 chars/token)
 const MAX_FILE_CHARS = 20_000;
 
+// ─── Global AI kill switch ────────────────────────────────────────────────────
+// Set DISABLE_AI=true in environment to halt all OpenAI calls immediately.
+// Useful when costs spike or the API has an incident.
+function isAiEnabled(): boolean {
+  return process.env.DISABLE_AI !== "true";
+}
+
 // Allow either session auth OR API key auth
 function isAuthed(req: Request): boolean {
   return !!(req.isAuthenticated?.() || req.user);
+}
+
+// ─── AI retry with exponential backoff ───────────────────────────────────────
+// Wraps any async AI call with up to 3 retries on transient errors.
+// Delays: 400 ms → 1.2 s → 3.6 s. Throws on the 4th failure.
+async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  const delays = [400, 1200, 3600];
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < delays.length) {
+        logger.warn({ attempt: attempt + 1, label, err }, "AI call failed — retrying with backoff");
+        await new Promise(res => setTimeout(res, delays[attempt]));
+      }
+    }
+  }
+  throw lastErr;
 }
 
 // Apply API key auth middleware so Bearer qak_... tokens populate req.user

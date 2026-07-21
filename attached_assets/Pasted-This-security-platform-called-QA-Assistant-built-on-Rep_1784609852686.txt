@@ -1,0 +1,104 @@
+This security platform called QA Assistant built on Replit. A full functional audit has already been completed and the following are now fixed:
+
+SAST line numbers (server-side resolution)
+DAST score recalculation (server-side formula)
+DAST HTML body content sent to AI
+File truncation warnings
+AI Fix generation for both SAST and DAST
+Evidence and exploit scenario display in UI
+
+The platform now needs to be made fully production-ready. Go through every area below, identify remaining gaps, and implement fixes:
+
+1. Authentication & User Management
+
+Is there a proper login/signup system with JWT or session-based auth?
+Are scan results isolated per user — can User A never see User B's scans?
+Is there password hashing (bcrypt/argon2) — never storing plain text?
+Add rate limiting per user account: max 10 scans/hour to prevent AI API abuse
+Add Google OAuth as a login option for ease of access
+Is there a proper logout that invalidates the session server-side?
+
+2. Database & Data Persistence
+
+Are scan results stored in a real persistent database (PostgreSQL/MongoDB), not in-memory?
+If Replit restarts, do all previous scans and history survive?
+Is there proper indexing on userId, scanId, createdAt for fast dashboard queries?
+Add soft delete — when a user deletes a scan, mark it deleted, don't hard-purge
+Are uploaded source code files cleaned up from disk after scanning to prevent storage bloat?
+Add a data retention policy: auto-delete raw file uploads after 24 hours, keep reports permanently
+
+3. Security Hardening of the Platform Itself
+
+Are all API endpoints protected with auth middleware — no endpoint accessible without a valid session?
+Is there input validation on every field: URL format, file type, file size, scan parameters?
+Are uploaded files scanned for malware or malicious payloads before being processed (zip bombs, polyglot files)?
+Is the SSRF protection blocking all private IP ranges: 127.x, 10.x, 172.16-31.x, 192.168.x, 169.254.x, ::1?
+Add Content Security Policy (CSP) headers on all frontend responses
+Add HSTS, X-Frame-Options, X-Content-Type-Options headers to all API responses
+Ensure all file upload paths are randomized (UUID-based), never user-controlled
+Are there SQL injection protections on all DB queries (parameterized queries, ORM)?
+
+4. AI API Reliability & Cost Control
+
+What happens if the AI API returns a malformed JSON response — does the scan crash or recover?
+Add an exponential backoff retry (max 3 retries) for AI API timeouts
+Add a per-user monthly token usage tracker to prevent runaway AI costs
+Add a global kill switch: an env variable to disable all AI calls instantly if costs spike
+Cache AI responses for identical inputs (same file hash = same result) to reduce redundant API calls
+If AI API is down, return a queued status and retry in background rather than failing immediately
+
+5. DAST Real Browser Automation
+
+Currently DAST only sends HTML metadata to the AI — it does not truly interact with the application
+Integrate a headless browser (Puppeteer or Playwright) so DAST can: click buttons, fill forms, follow redirects, trigger JavaScript, and observe actual runtime behavior
+The headless browser should capture: all network requests made by the page, all cookies set, all JS errors thrown, all form submission endpoints
+This full page interaction data should be passed to the AI for analysis, not just static HTML
+Add a hard timeout of 60 seconds on any DAST browser session with forced cleanup
+Sandbox the headless browser in a separate process — it must never have access to internal Replit network resources
+
+6. CI/CD Integration Hardening
+
+Are scheduled scans running reliably, or do they silently fail when Replit sleeps?
+Move scheduled scans to a proper job queue (BullMQ or similar) with retry on failure
+Add a scan status webhook: when a scheduled scan completes, POST the result to a user-configured URL
+Store the last 30 days of CI/CD scan results with diff comparison: "3 new vulnerabilities introduced since last scan"
+Add GitHub App integration so scans can be triggered automatically on every pull request
+
+7. Frontend Production Readiness
+
+Add proper error boundaries on every page — no white screen on unhandled errors
+Add loading skeletons on dashboard and report pages — no layout shift during data fetch
+Is the app fully responsive on mobile and tablet screens?
+Add an empty state for every screen: new user with no scans, scan with no findings, etc.
+Add a proper 404 and 500 error page
+Compress all assets (gzip/brotli), lazy-load heavy components, and audit Lighthouse score — target 90+
+Add a favicon, proper page titles, and meta descriptions for each route
+
+8. Monitoring & Observability
+
+Add structured server-side logging: every scan start, completion, failure, and AI API call should be logged with userId, scanId, duration, and status
+Integrate an error monitoring service (Sentry) to capture unhandled exceptions in production
+Add a /health endpoint that returns DB connection status, AI API reachability, and server uptime
+Add a simple admin panel showing: total scans today, AI API usage, active users, failed scans
+Set up uptime monitoring with alerting if the platform goes down
+
+9. Compliance & Legal
+
+Add a Terms of Service and Privacy Policy page — required before any public deployment
+Add a clear disclaimer: "Only scan applications you own or have explicit permission to test"
+DAST scanning a URL without permission is legally risky — add a mandatory consent checkbox before any DAST scan
+Log all DAST scan targets with timestamps for legal audit trail
+If storing any user code, add a data processing agreement option for enterprise users
+
+10. Pre-Deployment Final Checklist
+
+Run a full SAST scan of the QA Assistant's own source code using itself — fix anything it finds
+Run DAST against the deployed staging URL of QA Assistant itself
+Load test: simulate 20 concurrent users each running a scan — confirm no crashes, no data leaks between sessions
+Verify all environment variables are in Replit Secrets — grep the entire codebase for any hardcoded keys
+Confirm the production build has no console.log statements leaking sensitive data
+Test the complete user journey end-to-end on an incognito window: signup → SAST scan → DAST scan → view report → apply AI fix → export report → logout
+
+⚠️ Final Requirement:
+For every issue found above — implement the fix directly. Do not just describe what needs to be done. The goal is a platform that is secure, stable, scalable, and genuinely ready for real users in production — not a development prototype. After all fixes are applied, run a final TypeScript check and confirm zero errors.
+
