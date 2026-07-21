@@ -110,6 +110,58 @@ function recalculateScore(issues: Array<{ severity: string }>): number {
   return Math.max(0, score);
 }
 
+// ─── Line number resolver ─────────────────────────────────────────────────────
+// Given a code snippet string and the original file content, return the 1-indexed
+// line number of the first occurrence of the snippet's first non-blank line.
+// Returns null when the snippet cannot be located (e.g. it was paraphrased by AI).
+
+function findLineNumber(fileContent: string, snippet: string): number | null {
+  if (!snippet || !fileContent) return null;
+
+  // Strip leading/trailing whitespace and take the first non-empty line as anchor
+  const anchor = snippet
+    .split("\n")
+    .map(l => l.trim())
+    .find(l => l.length > 6); // need at least a few chars to avoid noise
+
+  if (!anchor) return null;
+
+  const lines = fileContent.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].includes(anchor)) return i + 1; // 1-indexed
+  }
+  return null;
+}
+
+// Post-process SAST issues: populate lineNumber from codeSnippet + filePath
+// using the actual uploaded file content as ground truth.
+function resolveLineNumbers(
+  issues: RawIssue[],
+  files: Array<{ name: string; content: string }>,
+): void {
+  for (const issue of issues) {
+    if (issue.lineNumber != null) continue; // already set
+    const snippet = String(issue.codeSnippet ?? "").trim();
+    const filePath = String(issue.filePath ?? "").trim();
+    if (!snippet) continue;
+
+    // Try the specific file first, then fall back to searching all files
+    const candidates = filePath
+      ? [files.find(f => f.name === filePath || f.name.endsWith(filePath) || filePath.endsWith(f.name)), ...files]
+      : files;
+
+    for (const file of candidates) {
+      if (!file) continue;
+      const ln = findLineNumber(file.content, snippet);
+      if (ln != null) {
+        issue.lineNumber = ln;
+        if (!filePath) issue.filePath = file.name;
+        break;
+      }
+    }
+  }
+}
+
 // ─── Analysis helpers ────────────────────────────────────────────────────────
 
 // ─── DAST header grader ───────────────────────────────────────────────────────
@@ -285,6 +337,23 @@ async function analyzeUrl(
     const serverFingerprint = rawHeaders["server"] ?? null;
     const poweredBy = rawHeaders["x-powered-by"] ?? null;
 
+    // ── Page body sample (first 5 000 chars, stripped of tags/whitespace) ────
+    // Gives the AI visibility into inline scripts, event handlers, template
+    // patterns, and actual form HTML — things the structured fields miss.
+    const pageBodySample = html
+      .replace(/<!--[\s\S]*?-->/g, "")           // strip HTML comments
+      .replace(/<style[\s\S]*?<\/style>/gi, "")  // strip CSS blocks
+      .replace(/<[^>]+>/g, " ")                  // collapse tags to spaces
+      .replace(/\s{2,}/g, " ")
+      .trim()
+      .slice(0, 5_000);
+
+    // Also capture the raw first <script> block content (if inline) for deeper analysis
+    const inlineScriptSample = (() => {
+      const match = html.match(/<script(?![^>]*src=)[^>]*>([\s\S]{1,3000}?)<\/script>/i);
+      return match?.[1]?.trim().slice(0, 2000) ?? null;
+    })();
+
     pageData = {
       url: appUrl,
       statusCode: resp.status,
@@ -304,6 +373,8 @@ async function analyzeUrl(
       scripts: { inline: inlineScripts, external: externalScripts },
       mixedContentRefs,
       metaTags,
+      pageBodySample: pageBodySample || null,
+      inlineScriptSample: inlineScriptSample || null,
     };
   } catch (err) {
     pageData = {
@@ -359,7 +430,7 @@ Respond with ONLY valid JSON:
   "testType": "url"
 }
 
-Score formula: 100 − (critical×20 + high×10 + medium×5 + low×2), minimum 0.
+Score formula: 100 − (critical×25 + high×12 + medium×5 + low×2), minimum 0. Set overallScore to 0 — it will be recalculated server-side from the issues array.
 OWASP: A01:2021-Broken Access Control | A02:2021-Cryptographic Failures | A03:2021-Injection | A04:2021-Insecure Design | A05:2021-Security Misconfiguration | A06:2021-Vulnerable Components | A07:2021-Identification and Authentication Failures | A08:2021-Software and Data Integrity Failures | A09:2021-Security Logging and Monitoring Failures | A10:2021-Server-Side Request Forgery
 effortLevel: "low" (<2 h), "medium" (half-day–2 days), "high" (multi-day/architectural)
 Sort by severity descending. Maximum 8 issues.`;
@@ -372,7 +443,15 @@ Sort by severity descending. Maximum 8 issues.`;
     max_tokens: 4096,
   });
 
-  return JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
+  const dastResult = JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
+
+  // Always recalculate the score server-side using the canonical formula.
+  // The AI's self-reported score is discarded — this ensures DAST and SAST
+  // scores are computed identically and cannot be manipulated by prompt injection.
+  const dastIssues = (dastResult.issues as Array<{ severity: string }>) ?? [];
+  dastResult.overallScore = recalculateScore(dastIssues);
+
+  return dastResult;
 }
 
 // ─── SAST tech-stack detector ─────────────────────────────────────────────────
@@ -521,9 +600,21 @@ async function analyzeCode(
     }),
   ];
 
+  // Increase per-file context from 8 000 to 12 000 chars to reduce the chance
+  // that vulnerabilities in the lower half of a file are invisible to the AI.
+  // 12 000 × 30 files = 360 k chars ≈ 90 k tokens, well within gpt-4o's window.
+  const PER_FILE_AI_CHARS = 12_000;
+  const truncatedFiles: string[] = []; // track files that were cut for metadata
+
   const filesSummary = prioritized
     .slice(0, 30)
-    .map(f => `### ${f.name}\n\`\`\`\n${f.content.slice(0, 8000)}\n\`\`\``)
+    .map(f => {
+      const wasTruncated = f.content.length > PER_FILE_AI_CHARS;
+      if (wasTruncated) truncatedFiles.push(f.name);
+      const content = f.content.slice(0, PER_FILE_AI_CHARS);
+      const note = wasTruncated ? `\n# [TRUNCATED: showing first ${PER_FILE_AI_CHARS} of ${f.content.length} chars — check remainder manually]` : "";
+      return `### ${f.name}${note}\n\`\`\`\n${content}\n\`\`\``;
+    })
     .join("\n\n");
 
   const fileTypes = [...new Set(files.map(f =>
@@ -673,7 +764,7 @@ Respond with ONLY valid JSON:
       "suggestedFix": "Concrete corrected code snippet or specific configuration change",
       "codeSnippet": "Exact vulnerable line(s) verbatim from the provided code",
       "filePath": "exact/file/name.ext as provided in the file headers above",
-      "lineNumber": null,
+      "lineNumber": <1-indexed line number of the FIRST vulnerable line in that file, or null if you cannot determine it>,
       "detectionMethod": "ai",
       "owasp": "A03:2021-Injection",
       "effortLevel": "low|medium|high",
@@ -703,6 +794,11 @@ Set overallScore to 0 — it will be recalculated server-side. Sort issues by se
   const rawAiIssues = (aiResult.issues as RawIssue[]) ?? [];
   const filteredAiIssues = filterSastIssues(rawAiIssues, deterministicTitles);
 
+  // ── Phase 3b: Resolve line numbers from code snippets ─────────────────────
+  // The AI may return a lineNumber or null. We always re-derive it from the
+  // actual uploaded file content so the number is ground-truth, not guessed.
+  resolveLineNumbers(filteredAiIssues, files);
+
   // ── Phase 4: Merge and recalculate score ──────────────────────────────────
   const allIssues = [...deterministicIssues, ...filteredAiIssues];
   const score = recalculateScore(allIssues as Array<{ severity: string }>);
@@ -715,6 +811,8 @@ Set overallScore to 0 — it will be recalculated server-side. Sort issues by se
       secretsFound: secretFindings.length,
       vulnerableDepsFound: scaFindings.length,
     },
+    // Surface truncation info so the frontend can warn users
+    truncatedFiles: truncatedFiles.length > 0 ? truncatedFiles : undefined,
   };
 }
 
@@ -1410,34 +1508,47 @@ router.post("/runs/:id/generate-fix", async (req: Request, res: Response) => {
   // wrapping values in labelled delimiters bounds the injection surface.
   const ft = (v: unknown, max: number) => String(v ?? "").slice(0, max);
 
+  const isSast = run.runType === "sast";
+  const hasCodeSnippet = ft(issue.codeSnippet, 800).trim().length > 0;
+
+  // Build context section differently for SAST vs DAST:
+  // - SAST has real code to fix, so we show the vulnerable snippet
+  // - DAST findings are config/HTTP-level, so we show evidence and suggest config changes
+  const contextSection = isSast && hasCodeSnippet
+    ? `[FILE]: ${ft(issue.filePath, 200)}
+[VULNERABLE_CODE]:
+\`\`\`
+${ft(issue.codeSnippet, 800)}
+\`\`\`
+
+Generate a complete, ready-to-paste code fix for the file above. Include any required imports. Fix the exact vulnerable pattern — don't just add a comment.`
+    : `[TARGET_URL]: ${ft(run.appUrl, 200)}
+[EVIDENCE]: ${ft(issue.evidence ?? issue.codeSnippet, 400)}
+[SUGGESTED_DIRECTION]: ${ft(issue.suggestedFix, 500)}
+
+This is a DAST (dynamic scan) finding — there is no single source file to patch. Generate a concrete, copy-paste ready configuration fix: an HTTP response header snippet, nginx/Apache/Express config block, or framework-specific middleware call, depending on the issue. Show the exact directive or code with correct values.`;
+
   try {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [{
         role: "user",
-        content: `You are a senior security engineer. Generate a precise, production-ready code fix for this vulnerability.
+        content: `You are a senior security engineer. Generate a precise, production-ready fix for this vulnerability.
 
 [ISSUE_TITLE]: ${ft(issue.title, 200)}
 [SEVERITY]: ${ft(issue.severity, 20)}
 [DESCRIPTION]: ${ft(issue.description, 600)}
 [ROOT_CAUSE]: ${ft(issue.possibleCause, 300)}
-[FIX_DIRECTION]: ${ft(issue.suggestedFix, 500)}
-[FILE]: ${ft(issue.filePath, 200)}
-[VULNERABLE_CODE]:
-\`\`\`
-${ft(issue.codeSnippet, 800)}
-\`\`\`
-[SCAN_TYPE]: ${run.runType === "sast" ? "Source code (SAST)" : "Live URL (DAST)"}
-[URL]: ${ft(run.appUrl, 200)}
+[SCAN_TYPE]: ${isSast ? "Source code (SAST)" : "Live URL (DAST)"}
 
-Generate a complete, ready-to-paste fix. Include imports if needed. Fix the exact vulnerability — don't just add a comment.
+${contextSection}
 
 Respond with ONLY valid JSON:
 {
-  "fixCode": "the complete code fix, properly formatted",
+  "fixCode": "the complete fix — code, config directive, or header value — properly formatted and ready to paste",
   "explanation": "2-3 sentences explaining exactly what was changed and why this eliminates the vulnerability",
-  "language": "programming language name (e.g. typescript, python, javascript, yaml, bash)",
-  "testSuggestion": "one concrete test/verification step to confirm the fix works"
+  "language": "programming language or config format (e.g. typescript, python, nginx, apache, http-header, yaml, bash)",
+  "testSuggestion": "one concrete test/verification step to confirm the fix works (e.g. curl command, browser DevTools check, unit test)"
 }`,
       }],
       response_format: { type: "json_object" },

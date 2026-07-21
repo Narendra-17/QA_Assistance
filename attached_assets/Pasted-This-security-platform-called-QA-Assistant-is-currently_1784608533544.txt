@@ -1,0 +1,182 @@
+This security platform called QA Assistant, is currently in development. Before deploying it, I need to make it fully functional, accurate, and production-ready. Help me go through a complete functional audit of the entire application.
+
+The platform includes:
+
+
+
+
+
+SAST — source code file upload → AI analysis → vulnerability report
+
+
+
+DAST — live URL input → AI-controlled testing → vulnerability report
+
+
+
+AI Fix Suggestions — AI generates secure code to fix identified vulnerabilities
+
+
+
+CI/CD Integration — scheduled scans with automated alerts
+
+
+
+Dashboard — security score trends, OWASP Top 10 breakdown, scan history
+
+Go through every area below and identify what is broken, incomplete, inaccurate, or missing:
+
+1. SAST Functional Audit
+
+
+
+
+
+Is the file upload actually reading and passing the full source code content to the AI, or just the filename?
+
+
+
+Is the AI receiving the raw code as context, or a truncated/summarized version?
+
+
+
+Are the vulnerability findings tied to specific line numbers, function names, and variable names from the actual uploaded file?
+
+
+
+Does it handle multiple file types correctly (.py, .js, .php, .java, .ts, .env)?
+
+
+
+What happens if a user uploads a completely clean file — does it still report vulnerabilities?
+
+
+
+What happens with large files — does it crash, truncate, or handle gracefully?
+
+2. DAST Functional Audit
+
+
+
+
+
+Is the AI actually crawling and interacting with the live URL, or just analyzing the URL string itself?
+
+
+
+Is it testing for real attack vectors (SQLi, XSS, IDOR, broken auth, open redirects) or just returning generic findings?
+
+
+
+What happens with URLs that require authentication — does it handle login flows?
+
+
+
+What happens with invalid, dead, or private URLs — does it error gracefully?
+
+
+
+Are findings specific to the target site, or identical regardless of which URL is provided?
+
+3. AI Fix Generation Audit
+
+
+
+
+
+Is the AI fix directly referencing the vulnerable code it found, or generating a generic fix template?
+
+
+
+Is the fixed code syntactically correct and actually secure?
+
+
+
+Does it preserve the original logic while only fixing the vulnerability?
+
+
+
+Test this: take a vulnerable SQL query, run it through SAST, apply the AI fix, and verify the fix uses parameterized queries or equivalent.
+
+4. CI/CD Integration Audit
+
+
+
+
+
+Are scheduled scans actually triggering on time?
+
+
+
+Are alerts being sent correctly (email/Slack/dashboard notification)?
+
+
+
+Is the scan running against the correct, latest version of the code?
+
+
+
+Does it store and compare results between runs to detect new vulnerabilities introduced?
+
+5. Dashboard & Reports Audit
+
+
+
+
+
+Is the security score calculated from real scan data or hardcoded/estimated?
+
+
+
+Does the score change meaningfully between a clean scan and a vulnerable one?
+
+
+
+Is the OWASP Top 10 mapping accurate to the actual findings?
+
+
+
+Does scan history persist correctly across sessions?
+
+
+
+Are charts and trend lines reflecting real historical data?
+
+6. Edge Cases & Stability
+
+
+
+
+
+What happens if the AI API call fails mid-scan — does the app crash or handle gracefully?
+
+
+
+What happens if two scans run simultaneously?
+
+
+
+Are there loading states, error messages, and empty states for every screen?
+
+
+
+Is there a scan timeout handler if a DAST scan takes too long?
+
+7. Accuracy Validation
+
+
+
+
+
+Run SAST on this intentionally vulnerable code snippet and verify findings are real and specific: [paste your test code here]
+
+
+
+Run DAST on a known vulnerable app (DVWA / Juice Shop / WebGoat) and verify findings match known vulnerabilities of that app.
+
+
+
+Run both on clean/empty input and confirm the platform correctly reports "No vulnerabilities found" instead of fabricating results.
+
+⚠️ Critical Requirement:
+For every issue found above — at first find the exact cause of the issue then implement the exact fix: whether it's a prompt engineering change, a logic fix in the code, an API handling issue, or a UI/UX problem. The goal is a platform that is genuinely accurate, stable, and ready for real users — not a demo that looks good but breaks under real conditions.

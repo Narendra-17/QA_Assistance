@@ -33,6 +33,12 @@ interface Issue {
   owasp?: string | null;
   effortLevel?: "low" | "medium" | "high" | null;
   effortNote?: string | null;
+  // DAST-specific: exact observed value confirming the finding
+  evidence?: string | null;
+  // SAST-specific: step-by-step exploit scenario for critical/high
+  exploitScenario?: string | null;
+  // AI confidence level for SAST findings
+  confidence?: "confirmed" | "probable" | "theoretical" | null;
 }
 
 interface Report {
@@ -42,6 +48,8 @@ interface Report {
   recommendations: string[];
   testType?: "url" | "sast";
   deterministicFindings?: { secretsFound: number; vulnerableDepsFound: number };
+  // Files truncated to AI char limit — user should manually review remainder
+  truncatedFiles?: string[];
 }
 
 interface RunData {
@@ -1805,6 +1813,29 @@ export default function Report() {
               </motion.div>
             )}
 
+            {/* Truncation warning — shown when one or more SAST files were cut */}
+            {report.truncatedFiles && report.truncatedFiles.length > 0 && (
+              <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
+                className="relative rounded-2xl border border-amber-500/22 overflow-hidden"
+                style={{ background: "linear-gradient(135deg, rgba(245,158,11,0.07), rgba(245,158,11,0.03))" }}>
+                <div className="absolute top-0 inset-x-0 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(245,158,11,0.6), transparent)" }} />
+                <div className="p-4 flex items-start gap-3">
+                  <div className="shrink-0 mt-0.5 w-8 h-8 rounded-lg bg-amber-500/15 border border-amber-500/25 flex items-center justify-center">
+                    <AlertTriangle className="w-4 h-4 text-amber-400" />
+                  </div>
+                  <div className="text-sm">
+                    <span className="text-amber-300 font-bold">Partial analysis — {report.truncatedFiles.length} large file{report.truncatedFiles.length > 1 ? "s" : ""} truncated · </span>
+                    <span className="text-amber-200/80">
+                      {report.truncatedFiles.length <= 3
+                        ? report.truncatedFiles.join(", ")
+                        : `${report.truncatedFiles.slice(0, 3).join(", ")} and ${report.truncatedFiles.length - 3} more`
+                      }. Vulnerabilities beyond the first 12 000 characters of these files were not analyzed. Consider splitting large files or reviewing the remainder manually.
+                    </span>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
             {/* Recommendations */}
             {report.recommendations.length > 0 && (
               <div className="relative rounded-2xl border border-white/8 overflow-hidden"
@@ -2117,6 +2148,35 @@ export default function Report() {
                                     </p>
                                   </div>
                                 </div>
+
+                                {/* Evidence — shown for DAST findings; the exact measured value */}
+                                {issue.evidence && (
+                                  <div className="rounded-xl p-3.5 bg-white/3 border border-white/8">
+                                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1.5">Evidence (Measured Value)</p>
+                                    <p className="text-xs font-mono text-amber-300/90 break-all leading-relaxed">{issue.evidence}</p>
+                                  </div>
+                                )}
+
+                                {/* Exploit Scenario — shown for confirmed/probable critical+high SAST findings */}
+                                {issue.exploitScenario && (issue.severity === "critical" || issue.severity === "high") && (
+                                  <div className="rounded-xl p-3.5 border border-red-500/15"
+                                    style={{ background: "rgba(239,68,68,0.05)" }}>
+                                    <div className="flex items-center gap-1.5 mb-1.5">
+                                      <Swords className="w-3 h-3 text-red-400/70" />
+                                      <p className="text-[10px] font-bold text-red-400/70 uppercase tracking-widest">Exploit Scenario</p>
+                                      {issue.confidence && (
+                                        <span className={["ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded-full border",
+                                          issue.confidence === "confirmed" ? "text-red-300 bg-red-500/10 border-red-500/25" :
+                                          issue.confidence === "probable"  ? "text-orange-300 bg-orange-500/10 border-orange-500/25" :
+                                          "text-zinc-400 bg-white/5 border-white/10"].join(" ")}>
+                                          {issue.confidence}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="text-xs text-red-200/80 leading-relaxed">{issue.exploitScenario}</p>
+                                  </div>
+                                )}
+
                                 {issue.codeSnippet && (
                                   <div>
                                     <div className="flex items-center justify-between mb-1.5">
