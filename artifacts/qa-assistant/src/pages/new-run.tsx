@@ -1,9 +1,9 @@
 import { useCreateQaRun, useCreateSastRun } from "@workspace/api-client-react";
-import { useLocation, useSearch } from "wouter";
+import { useLocation, useSearch, Link } from "wouter";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { Globe, FileCode2, Sparkles, Upload, X, Link as LinkIcon, AlertCircle, ShieldCheck, Clock } from "lucide-react";
+import { Globe, FileCode2, Sparkles, Upload, X, Link as LinkIcon, AlertCircle, ShieldCheck, Clock, Scale } from "lucide-react";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { Button } from "@/components/ui/button";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -12,6 +12,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { useState, useRef, useCallback, useEffect } from "react";
+
+const BASE = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
 
 const urlSchema = z.object({
   appUrl: z.string().url("Enter a valid URL (e.g., https://example.com)"),
@@ -92,6 +94,7 @@ export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "s
   const [isDragging, setIsDragging] = useState(false);
   const [recentUrls, setRecentUrls]   = useState<string[]>([]);
   const [showRecent, setShowRecent]   = useState(false);
+  const [dastConsent, setDastConsent] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const urlForm = useForm<UrlForm>({ resolver: zodResolver(urlSchema), defaultValues: { appUrl: prefillUrl, appDescription: prefillDesc } });
@@ -336,13 +339,55 @@ export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "s
                       </FormItem>
                     )} />
 
+                    {/* Legal disclaimer + consent checkbox */}
+                    <div className="rounded-xl overflow-hidden"
+                      style={{ background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.16)" }}>
+                      <div className="flex items-start gap-2.5 px-3.5 py-3">
+                        <Scale className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                        <p className="text-amber-300/80 text-xs leading-relaxed">
+                          Only scan applications you own or have explicit permission to test.
+                          Unauthorized scanning may be illegal.{" "}
+                          <Link href={`${BASE}/terms`} className="text-amber-300 underline hover:text-amber-200 transition-colors">Terms</Link>
+                          {" · "}
+                          <Link href={`${BASE}/privacy`} className="text-amber-300 underline hover:text-amber-200 transition-colors">Privacy</Link>
+                        </p>
+                      </div>
+                      <label className="flex items-center gap-2.5 px-3.5 py-2.5 cursor-pointer group"
+                        style={{ borderTop: "1px solid rgba(245,158,11,0.1)" }}>
+                        <div className="relative shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={dastConsent}
+                            onChange={e => setDastConsent(e.target.checked)}
+                            className="sr-only"
+                          />
+                          <div
+                            className="w-4 h-4 rounded flex items-center justify-center transition-all duration-150"
+                            style={{
+                              background: dastConsent ? "hsl(258,85%,60%)" : "rgba(255,255,255,0.06)",
+                              border: dastConsent ? "1px solid hsl(258,85%,60%)" : "1px solid rgba(255,255,255,0.15)",
+                            }}
+                          >
+                            {dastConsent && (
+                              <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 10 10">
+                                <path d="M1.5 5l2.5 2.5 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                            )}
+                          </div>
+                        </div>
+                        <span className="text-xs text-zinc-400 group-hover:text-zinc-300 transition-colors select-none">
+                          I confirm I own or have explicit written permission to scan this application
+                        </span>
+                      </label>
+                    </div>
+
                     <button
                       type="submit"
-                      disabled={createMutation.isPending}
+                      disabled={createMutation.isPending || !dastConsent}
                       className="relative w-full h-12 rounded-xl font-semibold text-white overflow-hidden transition-all gap-2 disabled:opacity-60 disabled:cursor-not-allowed group"
                       style={{
                         background: "linear-gradient(135deg, hsl(258,85%,60%), hsl(258,85%,52%))",
-                        boxShadow: !createMutation.isPending ? "0 4px 24px rgba(139,92,246,0.38), 0 1px 0 rgba(255,255,255,0.1) inset" : "none",
+                        boxShadow: (!createMutation.isPending && dastConsent) ? "0 4px 24px rgba(139,92,246,0.38), 0 1px 0 rgba(255,255,255,0.1) inset" : "none",
                       }}
                     >
                       <span className="absolute inset-y-0 left-0 w-[40%] bg-gradient-to-r from-transparent via-white/12 to-transparent -translate-x-full group-hover:translate-x-[300%] transition-transform duration-700 ease-in-out" />

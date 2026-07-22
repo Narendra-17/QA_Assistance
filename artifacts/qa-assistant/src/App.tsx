@@ -199,6 +199,8 @@ function ProtectedRouter() {
           <Route path="/register"          component={Register}       />
           <Route path="/forgot-password"   component={ForgotPassword} />
           <Route path="/reset-password"    component={ResetPassword}  />
+          <Route path="/terms"             component={Terms}          />
+          <Route path="/privacy"           component={Privacy}        />
           <Route                           component={Landing}        />
         </Switch>
       </Suspense>
@@ -218,6 +220,8 @@ function ProtectedRouter() {
             <Route path="/runs/:id"     component={() => <PageErrorBoundary label="Report"><Report /></PageErrorBoundary>}          />
             <Route path="/integrations" component={() => <PageErrorBoundary label="Integrations"><Integrations /></PageErrorBoundary>} />
             <Route path="/settings"     component={() => <PageErrorBoundary label="Settings"><Settings /></PageErrorBoundary>}      />
+            <Route path="/terms"        component={() => <PageErrorBoundary label="Terms"><Terms /></PageErrorBoundary>}            />
+            <Route path="/privacy"      component={() => <PageErrorBoundary label="Privacy"><Privacy /></PageErrorBoundary>}        />
             <Route path="/share/:token" component={SharedReport} />
             <Route                      component={NotFound}     />
           </Switch>

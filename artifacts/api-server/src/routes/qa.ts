@@ -56,10 +56,11 @@ async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (attempt < delays.length) {
-        logger.warn({ attempt: attempt + 1, label, err }, "AI call failed — retrying with backoff");
-        await new Promise(res => setTimeout(res, delays[attempt]));
-      }
+      // Never retry intentional aborts (e.g. user-triggered timeout / AbortController)
+      const isAbort = err instanceof Error && (err.name === "AbortError" || err.message.includes("aborted"));
+      if (isAbort || attempt >= delays.length) break;
+      logger.warn({ attempt: attempt + 1, label, err: (err as Error).message }, "AI call failed — retrying with backoff");
+      await new Promise(res => setTimeout(res, delays[attempt]));
     }
   }
   throw lastErr;
@@ -257,6 +258,9 @@ async function analyzeUrl(
   appUrl: string,
   appDescription: string,
 ): Promise<Record<string, unknown>> {
+  if (!isAiEnabled()) {
+    throw new Error("AI analysis is currently disabled (DISABLE_AI kill switch is active). Please try again later.");
+  }
   const isHttps = appUrl.startsWith("https://");
   const rawHeaders: Record<string, string | null> = {
     "strict-transport-security": null,
@@ -466,15 +470,22 @@ OWASP: A01:2021-Broken Access Control | A02:2021-Cryptographic Failures | A03:20
 effortLevel: "low" (<2 h), "medium" (half-day–2 days), "high" (multi-day/architectural)
 Sort by severity descending. Maximum 8 issues.`;
 
-  const completion = await openai.chat.completions.create({
+  const completion = await withRetry(() => openai.chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
     temperature: 0.1,
     max_tokens: 4096,
-  });
+  }), "analyzeUrl");
 
-  const dastResult = JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
+  let dastResult: Record<string, unknown>;
+  try {
+    dastResult = JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
+    if (typeof dastResult !== "object" || dastResult === null) throw new Error("Non-object response");
+  } catch {
+    logger.warn({ url: appUrl }, "DAST AI returned malformed JSON — using empty report");
+    dastResult = { summary: "AI returned an unreadable response. The page was fetched but analysis could not be completed.", issues: [], testType: "url" };
+  }
 
   // Always recalculate the score server-side using the canonical formula.
   // The AI's self-reported score is discarded — this ensures DAST and SAST
@@ -605,6 +616,9 @@ async function analyzeCode(
   projectName: string,
   description: string,
 ): Promise<Record<string, unknown>> {
+  if (!isAiEnabled()) {
+    throw new Error("AI analysis is currently disabled (DISABLE_AI kill switch is active). Please try again later.");
+  }
   // ── Phase 1: Deterministic pre-scan (secrets + SCA) ──────────────────────
   const [secretFindings, scaFindings] = await Promise.all([
     Promise.resolve(detectSecrets(files)),
@@ -811,15 +825,22 @@ OWASP: A01:2021-Broken Access Control | A02:2021-Cryptographic Failures | A03:20
 effortLevel: "low" (<2 h), "medium" (half-day–2 days), "high" (multi-day/architectural)
 Set overallScore to 0 — it will be recalculated server-side. Sort issues by severity descending (critical first).`;
 
-  const completion = await openai.chat.completions.create({
+  const completion = await withRetry(() => openai.chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
     temperature: 0.1,
     max_tokens: 8192,
-  });
+  }), "analyzeCode");
 
-  const aiResult = JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
+  let aiResult: Record<string, unknown>;
+  try {
+    aiResult = JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
+    if (typeof aiResult !== "object" || aiResult === null) throw new Error("Non-object response");
+  } catch {
+    logger.warn({ projectName }, "SAST AI returned malformed JSON — using deterministic results only");
+    aiResult = { summary: "AI analysis could not be parsed. Deterministic scanner results (secrets/SCA) are still included below.", issues: [], testType: "sast" };
+  }
 
   // ── Phase 3: Post-process AI findings to remove false positives ───────────
   const rawAiIssues = (aiResult.issues as RawIssue[]) ?? [];
@@ -1015,7 +1036,19 @@ router.post("/runs", async (req: Request, res: Response) => {
     return void res.status(500).json({ error: "Failed to validate URL" });
   }
 
+  // Log DAST target for legal audit trail (userId + target + timestamp)
+  logger.info({ event: "DAST_TARGET_SCANNED", userId, appUrl, ts: new Date().toISOString() }, "DAST scan initiated");
+
   try {
+    const oneHourAgo = new Date(Date.now() - 3_600_000);
+    const [{ hourlyCount }] = await db
+      .select({ hourlyCount: count() })
+      .from(qaRunsTable)
+      .where(and(eq(qaRunsTable.userId, userId), gt(qaRunsTable.createdAt, oneHourAgo)));
+    if (hourlyCount >= MAX_HOURLY_SCANS_PER_USER) {
+      return void res.status(429).json({ error: `Hourly scan limit reached (${MAX_HOURLY_SCANS_PER_USER} scans/hour). Please wait before running more scans.` });
+    }
+
     const [{ runCount }] = await db.select({ runCount: count() }).from(qaRunsTable).where(eq(qaRunsTable.userId, userId));
     if (runCount >= MAX_RUNS_PER_USER) {
       return void res.status(429).json({ error: `Scan limit reached (${MAX_RUNS_PER_USER} scans). Delete old runs to continue.` });
@@ -1092,6 +1125,15 @@ router.post("/sast", upload.array("files", 30), async (req: Request, res: Respon
   }
 
   try {
+    const oneHourAgo = new Date(Date.now() - 3_600_000);
+    const [{ hourlyCount: hourlyCountSast }] = await db
+      .select({ hourlyCount: count() })
+      .from(qaRunsTable)
+      .where(and(eq(qaRunsTable.userId, userId), gt(qaRunsTable.createdAt, oneHourAgo)));
+    if (hourlyCountSast >= MAX_HOURLY_SCANS_PER_USER) {
+      return void res.status(429).json({ error: `Hourly scan limit reached (${MAX_HOURLY_SCANS_PER_USER} scans/hour). Please wait before running more scans.` });
+    }
+
     const [{ runCount: sastCount }] = await db.select({ runCount: count() }).from(qaRunsTable).where(eq(qaRunsTable.userId, userId));
     if (sastCount >= MAX_RUNS_PER_USER) {
       return void res.status(429).json({ error: `Scan limit reached (${MAX_RUNS_PER_USER} scans). Delete old runs to continue.` });
@@ -1442,6 +1484,15 @@ router.post("/runs/:id/rescan", async (req: Request, res: Response) => {
   }
 
   try {
+    const oneHourAgo = new Date(Date.now() - 3_600_000);
+    const [{ hourlyCount: hourlyCountRescan }] = await db
+      .select({ hourlyCount: count() })
+      .from(qaRunsTable)
+      .where(and(eq(qaRunsTable.userId, userId), gt(qaRunsTable.createdAt, oneHourAgo)));
+    if (hourlyCountRescan >= MAX_HOURLY_SCANS_PER_USER) {
+      return void res.status(429).json({ error: `Hourly scan limit reached (${MAX_HOURLY_SCANS_PER_USER} scans/hour). Please wait before running more scans.` });
+    }
+
     const [{ runCount }] = await db.select({ runCount: count() }).from(qaRunsTable).where(eq(qaRunsTable.userId, userId));
     if (runCount >= MAX_RUNS_PER_USER) {
       return void res.status(429).json({ error: `Scan limit reached (${MAX_RUNS_PER_USER} scans). Delete old runs to continue.` });
@@ -1560,7 +1611,7 @@ Generate a complete, ready-to-paste code fix for the file above. Include any req
 This is a DAST (dynamic scan) finding — there is no single source file to patch. Generate a concrete, copy-paste ready configuration fix: an HTTP response header snippet, nginx/Apache/Express config block, or framework-specific middleware call, depending on the issue. Show the exact directive or code with correct values.`;
 
   try {
-    const completion = await openai.chat.completions.create({
+    const completion = await withRetry(() => openai.chat.completions.create({
       model: "gpt-4o",
       messages: [{
         role: "user",
@@ -1585,7 +1636,7 @@ Respond with ONLY valid JSON:
       response_format: { type: "json_object" },
       temperature: 0.15,
       max_tokens: 1500,
-    }, { signal: fixController.signal });
+    }, { signal: fixController.signal }), "generateFix");
 
     clearTimeout(fixTimeout);
     const result = JSON.parse(completion.choices[0].message.content ?? "{}");

@@ -329,6 +329,13 @@ export function AppSidebar() {
           </div>
         </div>
 
+        {/* Legal links */}
+        <div className="flex items-center gap-3 px-2.5 pb-1.5 pt-0.5">
+          <Link href="/terms"   className="text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors">Terms</Link>
+          <span className="text-zinc-700 text-[10px]">·</span>
+          <Link href="/privacy" className="text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors">Privacy</Link>
+        </div>
+
         <button
           onClick={logout}
           className="flex items-center gap-2 px-2.5 py-2 rounded-xl w-full text-zinc-600 transition-all text-[13px] group"

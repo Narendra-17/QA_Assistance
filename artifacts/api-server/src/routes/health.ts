@@ -33,10 +33,10 @@ router.get("/healthz", async (_req, res) => {
     checks.ai = "disabled (kill switch active)";
   } else {
     try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 5_000);
-      await openai.models.list({ signal: ctrl.signal } as Parameters<typeof openai.models.list>[0]);
-      clearTimeout(timer);
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("AI timeout")), 5_000)
+      );
+      await Promise.race([openai.models.list(), timeout]);
       aiOk = true;
     } catch {
       checks.status = "degraded";
