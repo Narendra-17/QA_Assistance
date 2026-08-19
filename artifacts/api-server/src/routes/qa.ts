@@ -32,6 +32,8 @@ const MAX_HOURLY_SCANS_PER_USER = 10;
 // Cap individual file content sent to the AI: limits prompt-injection surface
 // and prevents context-window overflow (~5k tokens per file at ~4 chars/token)
 const MAX_FILE_CHARS = 20_000;
+// Bound provider latency so every background scan reaches a terminal state.
+const AI_REQUEST_TIMEOUT_MS = 45_000;
 
 // ─── Global AI kill switch ────────────────────────────────────────────────────
 // Set DISABLE_AI=true in environment to halt all OpenAI calls immediately.
@@ -57,13 +59,34 @@ async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
     } catch (err) {
       lastErr = err;
       // Never retry intentional aborts (e.g. user-triggered timeout / AbortController)
-      const isAbort = err instanceof Error && (err.name === "AbortError" || err.message.includes("aborted"));
+      const isAbort = err instanceof Error && (
+        err.name === "AbortError"
+        || err.message.includes("aborted")
+        || err.message.includes("timed out")
+      );
       if (isAbort || attempt >= delays.length) break;
       logger.warn({ attempt: attempt + 1, label, err: (err as Error).message }, "AI call failed — retrying with backoff");
       await new Promise(res => setTimeout(res, delays[attempt]));
     }
   }
   throw lastErr;
+}
+
+async function withAiDeadline<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      fn(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${AI_REQUEST_TIMEOUT_MS / 1000}s`)),
+          AI_REQUEST_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 // Apply API key auth middleware so Bearer qak_... tokens populate req.user
@@ -470,13 +493,13 @@ OWASP: A01:2021-Broken Access Control | A02:2021-Cryptographic Failures | A03:20
 effortLevel: "low" (<2 h), "medium" (half-day–2 days), "high" (multi-day/architectural)
 Sort by severity descending. Maximum 8 issues.`;
 
-  const completion = await withRetry(() => openai.chat.completions.create({
+  const completion = await withRetry(() => withAiDeadline(() => openai.chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
     temperature: 0.1,
     max_tokens: 4096,
-  }), "analyzeUrl");
+  }), "analyzeUrl"), "analyzeUrl");
 
   let dastResult: Record<string, unknown>;
   try {
@@ -825,13 +848,13 @@ OWASP: A01:2021-Broken Access Control | A02:2021-Cryptographic Failures | A03:20
 effortLevel: "low" (<2 h), "medium" (half-day–2 days), "high" (multi-day/architectural)
 Set overallScore to 0 — it will be recalculated server-side. Sort issues by severity descending (critical first).`;
 
-  const completion = await withRetry(() => openai.chat.completions.create({
+  const completion = await withRetry(() => withAiDeadline(() => openai.chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
     temperature: 0.1,
     max_tokens: 8192,
-  }), "analyzeCode");
+  }), "analyzeCode"), "analyzeCode");
 
   let aiResult: Record<string, unknown>;
   try {

@@ -92,15 +92,29 @@ jobs:
 
       - name: Wait for analysis to complete
         run: |
+          FINAL_STATUS=running
           for i in $(seq 1 24); do
             STATUS=$(curl -sf \\
               -H "Authorization: Bearer \${{ secrets.QA_API_KEY }}" \\
               "${baseUrl}/api/qa/runs/\${{ steps.upload.outputs.run_id }}" \\
               | jq -r '.status')
             echo "[$i/24] Status: $STATUS"
-            if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ]; then break; fi
+            if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ]; then
+              FINAL_STATUS=$STATUS
+              break
+            fi
             sleep 5
           done
+
+          if [ "$FINAL_STATUS" != "completed" ] && [ "$FINAL_STATUS" != "failed" ]; then
+            echo "QA Assistant scan did not finish within the 2 minute CI wait window."
+            exit 1
+          fi
+
+          if [ "$FINAL_STATUS" = "failed" ]; then
+            echo "QA Assistant scan failed."
+            exit 1
+          fi
 
       - name: Download SARIF report
         run: |
