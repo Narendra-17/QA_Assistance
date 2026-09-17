@@ -1,4 +1,8 @@
 import { Router, type Request, type Response } from "express";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import { promisify } from "node:util";
 import { db } from "@workspace/db";
 import { qaRunsTable, shareTokensTable, issueStatusesTable } from "@workspace/db/schema";
 import { eq, and, desc, gt, asc, count } from "drizzle-orm";
@@ -21,8 +25,78 @@ import { scanDependencies, scaToIssues } from "../lib/sca-scanner";
 import { apiKeyAuth } from "../lib/api-key-auth";
 import { buildSarif } from "../lib/sarif";
 import { logger } from "../lib/logger";
+import {
+  buildDependencyGroups,
+  redactDeterministicLines,
+  scanDeterministicSast,
+} from "../lib/deterministic-sast";
+import { captureDastBrowser } from "../lib/dast-browser";
+import { runDastProbes } from "../lib/dast-probes";
 
 const router = Router();
+const execFileAsync = promisify(execFile);
+
+type ProgressEvent = {
+  stage: string;
+  message: string;
+  timestamp: string;
+};
+
+async function validateGeneratedFix(
+  fixCode: string,
+  language: string,
+): Promise<{ valid: boolean; message: string }> {
+  const code = fixCode.replace(/^```[\w-]*\s*/i, "").replace(/\s*```$/i, "").trim();
+  if (!code) return { valid: false, message: "The generated fix was empty." };
+  const normalized = language.toLowerCase();
+  const suffix = /python/.test(normalized) ? ".py" : ".js";
+  const shouldRun = /^(javascript|js|node|nodejs|python|py)$/.test(normalized);
+  if (!shouldRun) {
+    const balanced = ["{", "}", "(", ")", "[", "]"].every((token, index, all) => {
+      if (index % 2 === 0) return code.split(token).length - 1 === code.split(all[index + 1]).length - 1;
+      return true;
+    });
+    return balanced
+      ? { valid: true, message: "Structural validation passed for this configuration format." }
+      : { valid: false, message: "The generated configuration has unbalanced delimiters." };
+  }
+
+  const tempDir = await mkdtemp(`${os.tmpdir()}/qa-fix-`);
+  const filePath = `${tempDir}/generated${suffix}`;
+  try {
+    await writeFile(filePath, code, "utf8");
+    if (/python|py/.test(normalized)) {
+      await execFileAsync("python3", ["-m", "py_compile", filePath], { timeout: 5_000 });
+    } else {
+      await execFileAsync(process.execPath, ["--check", filePath], { timeout: 5_000 });
+    }
+    return { valid: true, message: "Syntax validation passed." };
+  } catch (error) {
+    const message = error instanceof Error ? error.message.slice(0, 500) : "Syntax validation failed.";
+    return { valid: false, message };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+const progressClients = new Map<string, Set<Response>>();
+
+function publishProgress(runId: string, stage: string, message: string): void {
+  const clients = progressClients.get(runId);
+  if (!clients?.size) return;
+  const event: ProgressEvent = { stage, message, timestamp: new Date().toISOString() };
+  for (const client of clients) {
+    client.write(`event: progress\ndata: ${JSON.stringify(event)}\n\n`);
+  }
+}
+
+function closeProgress(runId: string, stage: "complete" | "failed", message: string): void {
+  publishProgress(runId, stage, message);
+  const clients = progressClients.get(runId);
+  if (!clients) return;
+  for (const client of clients) client.end();
+  progressClients.delete(runId);
+}
 
 // ─── Per-user limits ──────────────────────────────────────────────────────────
 const MAX_RUNS_PER_USER = 500;
@@ -73,21 +147,21 @@ async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
 }
 
 async function withAiDeadline<T>(fn: () => Promise<T>, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      fn(),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`${label} timed out after ${AI_REQUEST_TIMEOUT_MS / 1000}s`)),
-          AI_REQUEST_TIMEOUT_MS,
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  return await new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${AI_REQUEST_TIMEOUT_MS / 1000}s`)),
+      AI_REQUEST_TIMEOUT_MS,
+    );
+    fn().then(
+      value => { clearTimeout(timer); resolve(value); },
+      error => { clearTimeout(timer); reject(error); },
+    );
+  });
 }
+
+type JsonCompletion = {
+  choices: Array<{ message: { content?: string | null } }>;
+};
 
 // Apply API key auth middleware so Bearer qak_... tokens populate req.user
 router.use(apiKeyAuth);
@@ -95,7 +169,7 @@ router.use(apiKeyAuth);
 // ─── Upload config ───────────────────────────────────────────────────────────
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 30, fieldSize: 1 * 1024 * 1024 },
+  limits: { fileSize: 5 * 1024 * 1024, files: 200, fieldSize: 1 * 1024 * 1024 },
 });
 
 // ─── Allowed file types ──────────────────────────────────────────────────────
@@ -163,6 +237,25 @@ function recalculateScore(issues: Array<{ severity: string }>): number {
     else if (issue.severity === "low") score -= 2;
   }
   return Math.max(0, score);
+}
+
+function calculateReportDelta(
+  previous: Record<string, unknown> | null | undefined,
+  next: Record<string, unknown>,
+): { newIssues: string[]; fixedIssues: string[]; persistingIssues: string[] } {
+  const titles = (report: Record<string, unknown> | null | undefined): Set<string> =>
+    new Set(
+      (Array.isArray(report?.issues) ? report.issues : [])
+        .map(issue => String((issue as { title?: unknown }).title ?? "").trim().toLowerCase().replace(/\s+/g, " "))
+        .filter(Boolean),
+    );
+  const before = titles(previous);
+  const after = titles(next);
+  return {
+    newIssues: [...after].filter(title => !before.has(title)),
+    fixedIssues: [...before].filter(title => !after.has(title)),
+    persistingIssues: [...after].filter(title => before.has(title)),
+  };
 }
 
 // ─── Line number resolver ─────────────────────────────────────────────────────
@@ -280,6 +373,7 @@ function gradeSecurityHeaders(headers: Record<string, string | null>): Record<st
 async function analyzeUrl(
   appUrl: string,
   appDescription: string,
+  onProgress?: (stage: string, message: string) => void,
 ): Promise<Record<string, unknown>> {
   if (!isAiEnabled()) {
     throw new Error("AI analysis is currently disabled (DISABLE_AI kill switch is active). Please try again later.");
@@ -300,8 +394,10 @@ async function analyzeUrl(
   };
 
   let pageData: Record<string, unknown> = { url: appUrl, fetchError: "Fetch not attempted" };
+  let probeIssues: Awaited<ReturnType<typeof runDastProbes>> = [];
 
   try {
+    onProgress?.("fetch", "Fetching target and measuring response headers...");
     // ── Parallel: main fetch + optional HTTP→HTTPS redirect check + CORS probe ──
     const mainController = new AbortController();
     const mainTimer = setTimeout(() => mainController.abort(), 15_000);
@@ -442,6 +538,16 @@ async function analyzeUrl(
     };
   }
 
+  onProgress?.("browser", "Rendering the page in a headless browser...");
+  const browserCapture = await captureDastBrowser(appUrl);
+  if (browserCapture) pageData.browserCapture = browserCapture;
+  onProgress?.("probes", "Running bounded active probes against observed inputs and paths...");
+  probeIssues = await runDastProbes(
+    appUrl,
+    browserCapture?.renderedHtml || String(pageData.pageBodySample ?? ""),
+  );
+  pageData.probeFindings = probeIssues.map(({ title, severity, evidence }) => ({ title, severity, evidence }));
+
   const prompt = `You are a senior application security engineer performing DAST (Dynamic Application Security Testing). Your ONLY job is to report issues that are DIRECTLY CONFIRMED by the measured scan data below — not theoretical, not inferred.
 
 Application URL: ${appUrl}
@@ -493,13 +599,13 @@ OWASP: A01:2021-Broken Access Control | A02:2021-Cryptographic Failures | A03:20
 effortLevel: "low" (<2 h), "medium" (half-day–2 days), "high" (multi-day/architectural)
 Sort by severity descending. Maximum 8 issues.`;
 
-  const completion = await withRetry(() => withAiDeadline(() => openai.chat.completions.create({
+  const completion = (await withRetry(() => withAiDeadline(() => openai.chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
     temperature: 0.1,
     max_tokens: 4096,
-  }), "analyzeUrl"), "analyzeUrl");
+  }), "analyzeUrl"), "analyzeUrl")) as JsonCompletion;
 
   let dastResult: Record<string, unknown>;
   try {
@@ -514,7 +620,15 @@ Sort by severity descending. Maximum 8 issues.`;
   // The AI's self-reported score is discarded — this ensures DAST and SAST
   // scores are computed identically and cannot be manipulated by prompt injection.
   const dastIssues = (dastResult.issues as Array<{ severity: string }>) ?? [];
-  dastResult.overallScore = recalculateScore(dastIssues);
+  const mergedDastIssues = [
+    ...probeIssues,
+    ...dastIssues.filter(issue => !probeIssues.some(probe => probe.title === (issue as { title?: string }).title)),
+  ];
+  dastResult.issues = mergedDastIssues;
+  dastResult.overallScore = recalculateScore(mergedDastIssues);
+  if (probeIssues.length) {
+    dastResult.summary = `${String(dastResult.summary ?? "")} ${probeIssues.length} confirmed active probe finding(s) were added.`;
+  }
 
   return dastResult;
 }
@@ -848,13 +962,13 @@ OWASP: A01:2021-Broken Access Control | A02:2021-Cryptographic Failures | A03:20
 effortLevel: "low" (<2 h), "medium" (half-day–2 days), "high" (multi-day/architectural)
 Set overallScore to 0 — it will be recalculated server-side. Sort issues by severity descending (critical first).`;
 
-  const completion = await withRetry(() => withAiDeadline(() => openai.chat.completions.create({
+  const completion = (await withRetry(() => withAiDeadline(() => openai.chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
     response_format: { type: "json_object" },
     temperature: 0.1,
     max_tokens: 8192,
-  }), "analyzeCode"), "analyzeCode");
+  }), "analyzeCode"), "analyzeCode")) as JsonCompletion;
 
   let aiResult: Record<string, unknown>;
   try {
@@ -888,6 +1002,147 @@ Set overallScore to 0 — it will be recalculated server-side. Sort issues by se
     },
     // Surface truncation info so the frontend can warn users
     truncatedFiles: truncatedFiles.length > 0 ? truncatedFiles : undefined,
+  };
+}
+
+async function analyzeCodeEnhanced(
+  files: Array<{ name: string; content: string }>,
+  projectName: string,
+  description: string,
+  onProgress?: (stage: string, message: string) => void,
+): Promise<Record<string, unknown>> {
+  if (!isAiEnabled()) {
+    throw new Error("AI analysis is currently disabled (DISABLE_AI kill switch is active). Please try again later.");
+  }
+
+  onProgress?.("deterministic", "Running secrets and deterministic code checks...");
+  const [secretFindings, scaFindings] = await Promise.all([
+    Promise.resolve(detectSecrets(files)),
+    scanDependencies(files),
+  ]);
+  const deterministicSastIssues = scanDeterministicSast(files);
+  const deterministicIssues = [
+    ...secretsToIssues(secretFindings),
+    ...scaToIssues(scaFindings),
+    ...deterministicSastIssues,
+  ];
+  const deterministicTitles = new Set(deterministicIssues.map(issue => issue.title));
+  const redactedFiles = redactDeterministicLines(files, deterministicSastIssues);
+
+  const highSignal = (file: { name: string }): number => {
+    const name = file.name.toLowerCase();
+    if (/(auth|login|password|token|session|payment|admin)/.test(name)) return 0;
+    if (/(routes?|controllers?|handlers?|api|db|models?|queries|repository|middleware)/.test(name)) return 1;
+    return 2;
+  };
+  const prioritized = [...redactedFiles].sort((a, b) => highSignal(a) - highSignal(b));
+  const selected = prioritized.slice(0, 30);
+  const excludedFiles = prioritized.slice(30).map(file => file.name);
+  const groups = buildDependencyGroups(selected);
+  const promptGroups = groups.slice(0, 10);
+  for (const group of groups.slice(10)) excludedFiles.push(...group.files.map(file => file.name));
+
+  const groupText = promptGroups.map((group, index) => {
+    const relationshipText = group.relationships.length
+      ? `\nRELATIONSHIPS:\n${group.relationships.join("\n")}`
+      : "";
+    const fileText = group.files.map(file => {
+      const content = file.content.slice(0, 12_000);
+      const truncated = file.content.length > 12_000
+        ? `\n// [TRUNCATED: showing first 12000 of ${file.content.length} characters]`
+        : "";
+      return `### ${file.name}${truncated}\n\`\`\`\n${content}\n\`\`\``;
+    }).join("\n\n");
+    return `FILE GROUP ${index + 1}${relationshipText}\n${fileText}`;
+  }).join("\n\n");
+
+  const basePrompt = `You are an elite application security engineer performing SAST for ${projectName}.
+Project description: ${description}
+The code below is grouped by import relationships. Trace data across file boundaries using the import relationships shown above.
+Only report vulnerabilities with exact source evidence from the supplied code. Return zero issues for clean code.
+
+FEW-SHOT QUALITY EXAMPLE:
+CORRECT: "SQL injection in getUserById" with the exact line \`db.query(\`SELECT * FROM users WHERE id=\${req.params.id}\`)\`, file path, line number, and an exploit using req.params.id.
+REJECTED: "Possible SQL injection in database layer" when no SQL construction or user-controlled value is shown. This is theoretical and must not be reported.
+
+Return JSON only:
+{
+  "summary": "2-3 sentences",
+  "attackChain": "4-6 sentences using only confirmed/probable findings",
+  "issues": [{
+    "title": "specific vulnerability and function",
+    "description": "what is wrong with exact variable/function references",
+    "exploitScenario": "required for critical/high",
+    "confidence": "confirmed|probable|theoretical",
+    "severity": "critical|high|medium|low",
+    "possibleCause": "root cause",
+    "suggestedFix": "specific fix",
+    "codeSnippet": "exact source line(s)",
+    "filePath": "exact supplied path",
+    "lineNumber": 1,
+    "detectionMethod": "ai",
+    "owasp": "A03:2021-Injection",
+    "effortLevel": "low|medium|high",
+    "effortNote": "specific change"
+  }],
+  "recommendations": ["prioritized recommendation"],
+  "testType": "sast"
+}
+Do not repeat deterministic findings listed here:
+${[...deterministicTitles].join("\n")}
+
+SOURCE GROUPS:
+${groupText}`;
+
+  const focusPasses = [
+    {
+      stage: "ai-pass-1",
+      label: "injection and access control",
+      checks: "SQL/NoSQL/command/LDAP/XPath/header injection, SSTI, IDOR, missing authorization, privilege escalation, mass assignment, prototype pollution, SSRF, path traversal, and open redirects.",
+    },
+    {
+      stage: "ai-pass-2",
+      label: "crypto, session, and misconfiguration",
+      checks: "weak password hashing, broken ciphers, static IVs, hardcoded keys, JWT algorithm confusion, weak JWT secrets, session fixation, insecure cookies, timing attacks, unsafe deserialization, ReDoS, XXE, CORS, IaC, and CI/CD injection.",
+    },
+  ];
+  const results: Record<string, unknown>[] = [];
+  for (const pass of focusPasses) {
+    onProgress?.(pass.stage, `AI scanning for ${pass.label} issues...`);
+    const completion = (await withRetry(() => withAiDeadline(() => openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [{ role: "user", content: `${basePrompt}\n\nFOCUS ONLY ON THIS PASS:\n${pass.checks}` }],
+      response_format: { type: "json_object" },
+      temperature: 0.1,
+      max_tokens: 4096,
+    }), pass.stage), pass.stage)) as JsonCompletion;
+    try {
+      const parsed = JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
+      if (parsed && typeof parsed === "object") results.push(parsed);
+    } catch {
+      logger.warn({ projectName, stage: pass.stage }, "SAST pass returned malformed JSON");
+    }
+  }
+
+  const rawIssues = results.flatMap(result => Array.isArray(result.issues) ? result.issues as RawIssue[] : []);
+  const filteredAiIssues = filterSastIssues(rawIssues, deterministicTitles);
+  resolveLineNumbers(filteredAiIssues, files);
+  const allIssues = [...deterministicIssues, ...filteredAiIssues];
+  onProgress?.("complete", "SAST analysis complete.");
+
+  return {
+    summary: results.map(result => String(result.summary ?? "")).filter(Boolean).join(" ") || "The scan completed with the available deterministic and AI checks.",
+    attackChain: results.map(result => String(result.attackChain ?? "")).filter(Boolean).join(" "),
+    issues: allIssues,
+    overallScore: recalculateScore(allIssues as Array<{ severity: string }>),
+    recommendations: [...new Set(results.flatMap(result => Array.isArray(result.recommendations) ? result.recommendations.map(String) : []))].slice(0, 8),
+    testType: "sast",
+    deterministicFindings: {
+      secretsFound: secretFindings.length,
+      deterministicChecksFound: deterministicSastIssues.length,
+      vulnerableDepsFound: scaFindings.length,
+    },
+    truncatedFiles: excludedFiles.length ? [...new Set(excludedFiles)] : undefined,
   };
 }
 
@@ -1083,20 +1338,22 @@ router.post("/runs", async (req: Request, res: Response) => {
       .returning();
     res.status(201).json(run);
 
-    analyzeUrl(appUrl, appDescription)
-      .then(report =>
-        db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, run.id)),
-      )
+    analyzeUrl(appUrl, appDescription, (stage, message) => publishProgress(run.id, stage, message))
+      .then(async report => {
+        await db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, run.id));
+        closeProgress(run.id, "complete", "DAST scan complete.");
+      })
       .catch(async (err) => {
         const msg = safeErrorMessage(err, "analyzeUrl");
         await db.update(qaRunsTable).set({ status: "failed", errorMessage: msg }).where(eq(qaRunsTable.id, run.id));
+        closeProgress(run.id, "failed", msg);
       });
   } catch {
     res.status(500).json({ error: "Failed to create run" });
   }
 });
 
-router.post("/sast", upload.array("files", 30), async (req: Request, res: Response) => {
+router.post("/sast", upload.array("files", 200), async (req: Request, res: Response) => {
   if (!isAuthed(req)) {
     logSecurityEvent("AUTH_MISSING", req, "POST /sast");
     return void res.status(401).json({ error: "Authentication required" });
@@ -1168,17 +1425,56 @@ router.post("/sast", upload.array("files", 30), async (req: Request, res: Respon
       .returning();
     res.status(201).json(run);
 
-    analyzeCode(codeFiles, projectName, description)
-      .then(report =>
-        db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, run.id)),
-      )
+    analyzeCodeEnhanced(codeFiles, projectName, description, (stage, message) => publishProgress(run.id, stage, message))
+      .then(async report => {
+        await db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, run.id));
+        closeProgress(run.id, "complete", "SAST scan complete.");
+      })
       .catch(async (err) => {
         const msg = safeErrorMessage(err, "analyzeCode");
         await db.update(qaRunsTable).set({ status: "failed", errorMessage: msg }).where(eq(qaRunsTable.id, run.id));
+        closeProgress(run.id, "failed", msg);
       });
   } catch {
     res.status(500).json({ error: "Failed to create SAST run" });
   }
+});
+
+router.get("/runs/:id/stream", async (req: Request, res: Response) => {
+  if (!isAuthed(req)) {
+    return void res.status(401).json({ error: "Authentication required" });
+  }
+  const id = String(req.params.id);
+  if (!isValidUuid(id)) return void res.status(400).json({ error: "Invalid run ID format" });
+  const userId = (req.user as { id: string }).id;
+  const [run] = await db.select({ id: qaRunsTable.id, status: qaRunsTable.status, errorMessage: qaRunsTable.errorMessage })
+    .from(qaRunsTable)
+    .where(and(eq(qaRunsTable.id, id), eq(qaRunsTable.userId, userId)));
+  if (!run) return void res.status(404).json({ error: "Run not found" });
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+  res.write(`event: progress\ndata: ${JSON.stringify({
+    stage: run.status === "completed" ? "complete" : run.status === "failed" ? "failed" : "queued",
+    message: run.errorMessage ?? (run.status === "running" ? "Scan is running..." : "Scan status loaded."),
+    timestamp: new Date().toISOString(),
+  })}\n\n`);
+
+  if (run.status === "completed" || run.status === "failed") {
+    res.end();
+    return;
+  }
+  const clients = progressClients.get(id) ?? new Set<Response>();
+  clients.add(res);
+  progressClients.set(id, clients);
+  const heartbeat = setInterval(() => res.write(": keep-alive\n\n"), 15_000);
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    clients.delete(res);
+    if (!clients.size) progressClients.delete(id);
+  });
 });
 
 router.get("/runs/:id", async (req: Request, res: Response) => {
@@ -1526,13 +1822,19 @@ router.post("/runs/:id/rescan", async (req: Request, res: Response) => {
       .returning();
     res.status(201).json(newRun);
 
-    analyzeUrl(orig.appUrl, orig.appDescription ?? "")
-      .then(report =>
-        db.update(qaRunsTable).set({ status: "completed", report }).where(eq(qaRunsTable.id, newRun.id)),
-      )
+    analyzeUrl(orig.appUrl, orig.appDescription ?? "", (stage, message) => publishProgress(newRun.id, stage, message))
+      .then(async report => {
+        const reportWithDelta = {
+          ...report,
+          delta: calculateReportDelta(orig.report as Record<string, unknown> | null, report),
+        };
+        await db.update(qaRunsTable).set({ status: "completed", report: reportWithDelta }).where(eq(qaRunsTable.id, newRun.id));
+        closeProgress(newRun.id, "complete", "DAST rescan complete.");
+      })
       .catch(async (err) => {
         const msg = safeErrorMessage(err, "analyzeUrl");
         await db.update(qaRunsTable).set({ status: "failed", errorMessage: msg }).where(eq(qaRunsTable.id, newRun.id));
+        closeProgress(newRun.id, "failed", msg);
       });
   } catch {
     res.status(500).json({ error: "Failed to create re-scan" });
@@ -1633,12 +1935,7 @@ Generate a complete, ready-to-paste code fix for the file above. Include any req
 
 This is a DAST (dynamic scan) finding — there is no single source file to patch. Generate a concrete, copy-paste ready configuration fix: an HTTP response header snippet, nginx/Apache/Express config block, or framework-specific middleware call, depending on the issue. Show the exact directive or code with correct values.`;
 
-  try {
-    const completion = await withRetry(() => openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [{
-        role: "user",
-        content: `You are a senior security engineer. Generate a precise, production-ready fix for this vulnerability.
+  const fixPrompt = `You are a senior security engineer. Generate a precise, production-ready fix for this vulnerability.
 
 [ISSUE_TITLE]: ${ft(issue.title, 200)}
 [SEVERITY]: ${ft(issue.severity, 20)}
@@ -1654,16 +1951,40 @@ Respond with ONLY valid JSON:
   "explanation": "2-3 sentences explaining exactly what was changed and why this eliminates the vulnerability",
   "language": "programming language or config format (e.g. typescript, python, nginx, apache, http-header, yaml, bash)",
   "testSuggestion": "one concrete test/verification step to confirm the fix works (e.g. curl command, browser DevTools check, unit test)"
-}`,
+}`;
+
+  const generateFix = async (feedback = "") => {
+    const completion = (await withRetry(() => openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [{
+        role: "user",
+        content: `${fixPrompt}${feedback ? `\n\nREGENERATION FEEDBACK:\n${feedback}\nReturn a corrected complete fix, not an explanation of the previous attempt.` : ""}`,
       }],
       response_format: { type: "json_object" },
       temperature: 0.15,
       max_tokens: 1500,
-    }, { signal: fixController.signal }), "generateFix");
+    }, { signal: fixController.signal }), "generateFix")) as JsonCompletion;
+    return JSON.parse(completion.choices[0].message.content ?? "{}") as Record<string, unknown>;
+  };
 
+  try {
+    let result = await generateFix();
+    let validation = await validateGeneratedFix(ft(result.fixCode, 10_000), ft(result.language, 50));
+    let regenerated = false;
+    if (!validation.valid) {
+      regenerated = true;
+      result = await generateFix(`Syntax validation failed: ${validation.message}`);
+      validation = await validateGeneratedFix(ft(result.fixCode, 10_000), ft(result.language, 50));
+    }
     clearTimeout(fixTimeout);
-    const result = JSON.parse(completion.choices[0].message.content ?? "{}");
-    res.json(result);
+    res.json({
+      ...result,
+      validation: {
+        valid: validation.valid,
+        message: validation.message,
+        regenerated,
+      },
+    });
   } catch (err) {
     clearTimeout(fixTimeout);
     if (err instanceof Error && err.name === "AbortError") {

@@ -1,0 +1,153 @@
+I have a security platform called QA Assistant with a fully working SAST and DAST engine. I have read the entire qa.ts source file. The current implementation has the following confirmed architectural weaknesses that cause missed vulnerabilities and inaccurate reports. Fix all of them end-to-end:
+
+🔴 SAST — Critical Accuracy Fixes
+
+Problem 1: Files are analyzed in isolation — no cross-file taint tracking
+Currently each file is sent to the AI as a standalone block. The AI cannot see that req.body.userId in routes/users.ts flows into getUserById(userId) in db/queries.ts and then into a raw SQL string. This is the single biggest cause of both missed vulnerabilities (false negatives) and hallucinated ones (false positives).
+
+Fix: Before sending files to the AI, build a cross-file dependency map:
+
+Parse every file for import/require statements and extract the dependency graph
+Identify which files export functions that receive user-controlled input (req, event, args)
+Group files by dependency relationship: if routes/users.ts imports from db/queries.ts, send both together in the same analysis block with a header explaining their relationship: "routes/users.ts imports: getUserById from db/queries.ts"
+Limit each group to 3 related files max to stay within context window
+The AI prompt must explicitly instruct: "Trace data across file boundaries using the import relationships shown above"
+
+Problem 2: 40+ vulnerability patterns in one prompt causes pattern-skipping
+The AI receives a single enormous prompt with 40+ vulnerability types. At this scale, the model demonstrably skips patterns in the middle of long lists — it anchors on the first few and last few items.
+
+Fix: Split the analysis into two sequential AI calls per file group:
+
+Call 1 — Injection & Access Control scan: SQL injection, NoSQL injection, command injection, SSTI, LDAP, XPath, header injection, IDOR, missing auth, privilege escalation, mass assignment, prototype pollution, SSRF, path traversal, open redirect
+Call 2 — Crypto, Session & Misconfiguration scan: weak password hashing, broken cipher, static IV, hardcoded keys, JWT algorithm confusion, weak JWT secret, session fixation, insecure cookies, timing attacks, insecure deserialization, ReDoS, XXE, CORS misconfiguration, IaC issues, CI/CD injection
+Deduplicate findings across both calls before merging
+This doubles AI call count per SAST scan but dramatically improves recall
+
+Problem 3: No deterministic checks for patterns that don't need AI
+Several vulnerability patterns are 100% deterministic and should never be sent to AI — they can be detected by regex with zero false positives:
+
+Add a new deterministic-sast.ts scanner that runs BEFORE the AI and flags:
+
+eval( / new Function( / vm.runInThisContext( with a variable argument (not a string literal)
+Math.random() used in token/session/key/password/otp/csrf context (variable name contains those keywords)
+child_process.exec( / execSync( with template literal containing a variable
+jwt.verify( without an algorithms: option in the same call
+md5( / sha1( / sha256( applied to a password (variable name contains password/passwd/pwd)
+.innerHTML = / document.write( with a variable (not a string literal)
+pickle.loads( / yaml.load(data without Loader=yaml.SafeLoader
+SELECT / INSERT / UPDATE / DELETE SQL keywords inside a template literal that also contains a variable
+
+Each deterministic SAST finding gets detectionMethod: "deterministic-sast" and confidence: "confirmed" — they are never sent to the AI and are never filtered by the false-positive filter.
+
+Problem 4: The AI prompt gives no grounding example
+The AI has no example of what a CORRECT finding looks like vs what a hallucinated finding looks like. Without this, it drifts toward generic descriptions.
+
+Add a few-shot example block at the top of the SAST prompt showing:
+
+One CORRECT finding with real code snippet, specific variable name, exact line context, precise exploit scenario
+One REJECTED finding with explanation of why (no code snippet, theoretical, sanitization present)
+
+This alone measurably improves precision without changing the checklist.
+
+🔴 DAST — Critical Accuracy Fixes
+
+Problem 5: DAST never executes JavaScript — entire SPAs return empty HTML shells
+The current implementation does fetch(url) and reads the raw HTML. For any React, Vue, Angular, or Next.js app, this returns <div id="root"></div> with no content. All the security-relevant content — forms, inputs, API calls, route handlers, DOM manipulation — is in JavaScript that never runs.
+
+Fix: Integrate Puppeteer as a headless browser layer for DAST:
+
+Install puppeteer (headless Chrome): npm install puppeteer
+Create a dast-browser.ts module that: launches a headless browser with a 45-second timeout, navigates to the URL, waits for network idle (waitUntil: 'networkidle2'), then extracts:
+The full rendered DOM HTML (after JS execution): page.content()
+All network requests made by the page (XHR, fetch, WebSocket): collected via page.on('request', ...)
+All cookies set: page.cookies()
+All console errors and JS exceptions: page.on('console', ...) and page.on('pageerror', ...)
+All localStorage and sessionStorage keys (check if tokens are stored there): run page.evaluate(() => Object.keys(localStorage))
+All inline event handlers (onclick, onmouseover containing javascript:): extracted from rendered DOM
+All forms with their actual action URLs and input field names (after JS renders them)
+All external script sources: <script src="..."> tags from rendered DOM
+Page title and meta tags from rendered DOM
+Send this rich dataset to the AI instead of the static fetch data
+Keep the existing static fetch as a fallback if Puppeteer fails or is unavailable
+Hard-kill the browser process after 45 seconds regardless of state to prevent resource leaks: browser.close() in a finally block with a setTimeout kill
+
+Problem 6: DAST never sends any test payloads — it only observes, never probes
+The current DAST is passive — it looks at what the server returns but never tests how the server responds to attack inputs. A real DAST tool sends payloads and observes reactions.
+
+Add an active probe layer in dast-probes.ts that runs targeted tests BEFORE the AI analysis and feeds confirmed findings as deterministic issues:
+
+XSS Probe: If the page has any GET parameters (from the URL or discovered links), send a request with ?param=<script>qaxss</script> and check if qaxss appears unencoded in the response body. If yes → confirmed reflected XSS finding.
+Open Redirect Probe: For any redirect=, next=, return=, url=, goto= parameters found in the URL or forms, send ?redirect=https://evil-attacker-qat.example.com and check if the response is a 3xx with Location: https://evil-attacker-qat.example.com. If yes → confirmed open redirect.
+Directory Disclosure Probe: Make parallel requests to these common sensitive paths and record which return non-404 responses: /.git/config, /.env, /api/v1/users, /admin, /phpinfo.php, /server-status, /actuator/health, /swagger.json, /openapi.json, /.well-known/security.txt
+TLS/SSL Probe: For HTTPS URLs, check the certificate details: expiry date (warn if < 30 days), whether the certificate hostname matches the URL hostname, and whether the server supports HTTP/1.1 (no TLS downgrade protection)
+Subdomain Takeover Probe: Check if the DNS CNAME record points to a third-party service (GitHub Pages, Heroku, Netlify, Vercel, S3) that returns a "not found" or "unclaimed" page — this indicates subdomain takeover
+Rate Limit Probe: Send 15 rapid identical POST requests to any login or API endpoint found, and check if any request after the 10th returns a 429. If none do → no rate limiting detected (medium finding)
+
+Each active probe result gets detectionMethod: "dast-probe" and confidence: "confirmed". They bypass the AI entirely and are reported directly.
+
+Problem 7: CORS probe only tests one scenario
+The current CORS probe sends one request with Origin: https://evil-attacker.example.com and checks if it's reflected. This misses the most dangerous CORS misconfiguration: reflecting the origin WITH Access-Control-Allow-Credentials: true.
+
+Enhance the CORS probe to test three scenarios:
+
+Scenario A: Origin: https://evil-attacker.example.com → does ACAO reflect it?
+Scenario B: Origin: null → does ACAO return null? (allows sandboxed iframe attacks)
+Scenario C: OPTIONS preflight with Origin: https://evil-attacker.example.com and Access-Control-Request-Method: POST → does the server return Access-Control-Allow-Origin: https://evil-attacker.example.com with Access-Control-Allow-Credentials: true?
+
+Only Scenario C with credentials:true is critical severity. A alone without credentials is medium at most.
+
+Problem 8: DAST AI prompt does not use the richer browser data
+Even after adding Puppeteer data, the current AI prompt structure won't know what to do with it. Rewrite the DAST prompt to:
+
+Have a dedicated section for: rendered DOM findings, network request patterns, localStorage/sessionStorage token exposure, console errors revealing stack traces or internal paths, forms discovered post-JS-execution, external script integrity (no SRI attributes)
+Explicitly instruct: "The page data below was captured by a real headless browser after full JavaScript execution — you are seeing the actual rendered state, not the server-sent HTML shell"
+Add new vulnerability checks the static version couldn't do: DOM XSS (innerHTML assignments visible in rendered DOM), postMessage without origin validation (if inline scripts contain window.addEventListener('message', without checking event.origin), token in URL parameters (API keys or JWTs visible in the network request log)
+🟠 Workflow Enhancements
+
+Problem 9: Scan progress is opaque — users see a spinner for 30-90 seconds
+Add Server-Sent Events (SSE) progress streaming:
+
+Add GET /api/qa/runs/:id/stream that opens an SSE connection
+As a scan progresses through stages, push events: {stage: "deterministic", message: "Running secrets detection..."}, {stage: "sca", message: "Checking dependencies against CVE database..."}, {stage: "ai-pass-1", message: "AI scanning for injection vulnerabilities..."}, {stage: "ai-pass-2", message: "AI scanning for crypto and session issues..."}, {stage: "complete", message: "Scan complete"}
+On the frontend, replace the polling interval with an EventSource that closes on complete or failed
+
+Problem 10: Rescanning a URL shows no comparison to previous scan
+After a rescan completes, compute a diff between the new report and the previous completed scan of the same URL:
+
+new: issues in new scan not present in previous (by title similarity)
+fixed: issues in previous scan not present in new scan
+persisting: issues present in both
+Store as delta in the report JSONB
+Show on the report page as: +2 new vulnerabilities / 3 fixed since last scan
+
+Problem 11: Large codebases exceed the 30-file limit with no prioritization signal
+When more than 30 files are uploaded, the current system silently drops files beyond index 30. The dropped files might be the most security-critical ones.
+
+Fix: When file count exceeds 30, apply smart prioritization before truncating:
+
+Tier 1 (always include): files with auth, login, password, token, session, payment, admin in their name or path
+Tier 2 (include next): route files (routes/, controllers/, handlers/, api/), database files (db/, models/, queries/, repository/), middleware files
+Tier 3 (include if space): everything else
+Report which files were excluded in the truncatedFiles metadata so the user knows
+
+Problem 12: The fix generator doesn't verify the fix is syntactically valid
+The AI sometimes generates a fix with a syntax error, especially for languages like Python or Go.
+
+After the fix is generated:
+
+For JavaScript/TypeScript fixes: attempt new Function(fixCode) (wrapped in try-catch) as a basic syntax check
+For all fixes: ask the AI a second micro-call: "Does this code snippet have any syntax errors? Reply only with {valid: true} or {valid: false, error: '...'}"
+If invalid, regenerate once with: "Your previous fix had this syntax error: [error]. Regenerate the fix with the error corrected."
+Surface a syntaxVerified: true/false field in the fix response so the frontend can show a warning badge
+✅ Implementation Requirements
+
+For every problem above:
+
+Implement the full code change end-to-end — schema changes, new modules, updated prompts, frontend display
+After all changes, run TypeScript check: zero errors required
+Run a validation test:
+SAST: upload a file containing a known SQL injection (db.query("SELECT * FROM users WHERE id=" + req.params.id)) and verify the report flags it as confirmed critical with the exact line quoted
+SAST: upload a completely clean file and verify the report returns 0 issues
+DAST: scan https://example.com and verify findings are specific to that domain's actual headers, not generic boilerplate
+DAST: scan a URL that does not exist and verify the error is handled gracefully with a clear user-facing message
+Do not describe what to do — implement it. When done, report: which files were changed, what the TypeScript check result was, and the result of each validation test above.

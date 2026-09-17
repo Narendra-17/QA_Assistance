@@ -276,6 +276,37 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
 
+  /qa/runs/{id}/stream:
+    get:
+      tags: [QA]
+      operationId: streamQaRunProgress
+      summary: Stream progress events for an authenticated QA run
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Server-sent progress events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
   /qa/sast:
     post:
       tags: [QA]

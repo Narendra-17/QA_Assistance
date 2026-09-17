@@ -142,7 +142,7 @@ export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "s
     });
     setFiles(prev => {
       const existing = new Set(prev.map(f => f.name));
-      return [...prev, ...arr.filter(f => !existing.has(f.name))].slice(0, 30);
+      return [...prev, ...arr.filter(f => !existing.has(f.name))].slice(0, 200);
     });
   }, []);
 
@@ -557,7 +557,7 @@ export default function NewRun({ initialTab = "url" }: { initialTab?: "url" | "s
                         <p className="text-zinc-500 text-xs mt-1">
                           Source code · Shell scripts · IaC (.tf/.hcl) · Dockerfiles · Config files
                         </p>
-                        <p className="text-zinc-600 text-[10px] mt-0.5">Max 5 MB per file · Up to 30 files</p>
+                        <p className="text-zinc-600 text-[10px] mt-0.5">Max 5 MB per file · Up to 200 files; highest-signal files are prioritized</p>
                       </div>
                     </div>
 

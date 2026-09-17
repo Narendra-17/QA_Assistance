@@ -7,3 +7,4 @@
 - [SAST line numbers](sast-line-numbers.md) — prompt used to hardcode lineNumber:null; now asks AI for 1-indexed line number AND resolveLineNumbers() post-processes using findLineNumber() to derive ground-truth values from uploaded file content.
 - [DAST page body in prompt](dast-page-body.md) — pageData sent to AI now includes pageBodySample (5 000 chars stripped HTML) and inlineScriptSample (first inline <script> block, 2 000 chars) for richer detection beyond headers/cookies.
 - [AI Fix prompt: DAST vs SAST](ai-fix-dast-sast.md) — fix generation now branches on isSast && hasCodeSnippet: SAST gets the actual vulnerable code snippet; DAST gets evidence + suggestedFix direction + instruction to generate an HTTP header/nginx/Express config block.
+- [Headless DAST runtime](dast-browser-runtime.md) — use workspace Chromium when present and retain static-fetch fallback when browser launch is unavailable.

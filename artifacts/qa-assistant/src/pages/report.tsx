@@ -29,7 +29,7 @@ interface Issue {
   codeSnippet?: string | null;
   filePath?: string | null;
   lineNumber?: number | null;
-  detectionMethod?: "deterministic" | "sca-osv" | "ai";
+  detectionMethod?: "deterministic" | "deterministic-sast" | "dast-probe" | "sca-osv" | "ai";
   owasp?: string | null;
   effortLevel?: "low" | "medium" | "high" | null;
   effortNote?: string | null;
@@ -47,9 +47,14 @@ interface Report {
   overallScore: number;
   recommendations: string[];
   testType?: "url" | "sast";
-  deterministicFindings?: { secretsFound: number; vulnerableDepsFound: number };
+  deterministicFindings?: { secretsFound: number; deterministicChecksFound?: number; vulnerableDepsFound: number };
   // Files truncated to AI char limit — user should manually review remainder
   truncatedFiles?: string[];
+  delta?: {
+    newIssues: string[];
+    fixedIssues: string[];
+    persistingIssues: string[];
+  };
 }
 
 interface RunData {
@@ -425,7 +430,7 @@ function SeverityBar({ issues }: { issues: Issue[] }) {
   );
 }
 
-function ProgressAnalysis({ isUrl, startedAt }: { isUrl: boolean; startedAt?: string }) {
+function ProgressAnalysis({ isUrl, startedAt, progressMessage }: { isUrl: boolean; startedAt?: string; progressMessage?: string }) {
   const STEPS = isUrl
     ? [
         { label: "Resolving URL & fetching content",      est: 4  },
@@ -482,7 +487,8 @@ function ProgressAnalysis({ isUrl, startedAt }: { isUrl: boolean; startedAt?: st
           <Loader2 className="relative w-5 h-5 text-violet-400 animate-spin" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-display font-bold text-white mb-1.5">AI Analysis in Progress</p>
+          <p className="text-sm font-display font-bold text-white mb-1.5">Security Analysis in Progress</p>
+          {progressMessage && <p className="text-[11px] text-zinc-400 mb-2 truncate">{progressMessage}</p>}
           <div className="flex items-center gap-2">
             <div className="flex-1 h-1 rounded-full bg-white/6 overflow-hidden">
               <motion.div
@@ -988,6 +994,7 @@ export default function Report() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
   const [pollingEnabled, setPollingEnabled] = useState(true);
+  const [progressMessage, setProgressMessage] = useState<string | undefined>();
   const [filterSev, setFilterSev] = useState<"all" | SevKey>("all");
   const [issueSearch, setIssueSearch] = useState("");
   const [expandedIssue, setExpandedIssue] = useState<number | null>(null);
@@ -995,20 +1002,49 @@ export default function Report() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [fixLoading, setFixLoading] = useState<Record<number, boolean>>({});
-  const [fixResults, setFixResults] = useState<Record<number, { fixCode: string; explanation: string; language: string; testSuggestion: string }>>({});
+  const [fixResults, setFixResults] = useState<Record<number, {
+    fixCode: string; explanation: string; language: string; testSuggestion: string;
+    validation?: { valid: boolean; message: string; regenerated: boolean };
+  }>>({});
   const [filterOwasp, setFilterOwasp] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<"all" | IssueStatus["status"]>("all");
   const [sortBy, setSortBy] = useState<"severity" | "effort" | "owasp">("severity");
   const queryClient = useQueryClient();
   const prevStatusRef = useRef<string | undefined>(undefined);
 
-  const { data: run, isLoading } = (useGetQaRun as any)(id!, {
+  const { data: run, isLoading, refetch } = (useGetQaRun as any)(id!, {
     query: { refetchInterval: pollingEnabled ? 3000 : false, staleTime: 0 },
-  }) as { data: RunData | undefined; isLoading: boolean };
+  }) as { data: RunData | undefined; isLoading: boolean; refetch: () => Promise<unknown> };
 
   useEffect(() => {
     if (run?.status === "completed" || run?.status === "failed") setPollingEnabled(false);
   }, [run?.status]);
+
+  // Progress is streamed from the server. Polling remains a fallback if an
+  // intermediary does not support long-lived EventSource connections.
+  useEffect(() => {
+    if (!id || !run || run.status === "completed" || run.status === "failed") return;
+    const base = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
+    const source = new EventSource(`${base}/api/qa/runs/${id}/stream`);
+    source.onopen = () => setPollingEnabled(false);
+    source.addEventListener("progress", event => {
+      try {
+        const payload = JSON.parse((event as MessageEvent).data) as { stage?: string; message?: string };
+        if (payload.message) setProgressMessage(payload.message);
+        if (payload.stage === "complete" || payload.stage === "failed") {
+          source.close();
+          setPollingEnabled(true);
+          void refetch();
+        }
+      } catch {
+        // A malformed progress event must not break report rendering.
+      }
+    });
+    source.onerror = () => {
+      if (source.readyState === EventSource.CLOSED) setPollingEnabled(true);
+    };
+    return () => source.close();
+  }, [id, run?.status, refetch]);
 
   // Browser notification when scan finishes
   useEffect(() => {
@@ -1663,7 +1699,7 @@ export default function Report() {
         <AnimatePresence>
           {isRunning && (
             <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}>
-              <ProgressAnalysis isUrl={isUrl} startedAt={run?.createdAt} />
+              <ProgressAnalysis isUrl={isUrl} startedAt={run?.createdAt} progressMessage={progressMessage} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -1728,6 +1764,20 @@ export default function Report() {
                   </p>
                   <p className="text-zinc-300 leading-relaxed text-sm">{report.summary}</p>
                 </div>
+                {report.delta && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {[
+                      { label: "New", count: report.delta.newIssues.length, color: "#F97316", items: report.delta.newIssues },
+                      { label: "Fixed", count: report.delta.fixedIssues.length, color: "#10B981", items: report.delta.fixedIssues },
+                      { label: "Persisting", count: report.delta.persistingIssues.length, color: "#F59E0B", items: report.delta.persistingIssues },
+                    ].map(group => (
+                      <div key={group.label} className="rounded-xl border border-white/7 bg-white/3 px-3 py-2" title={group.items.join("\n") || `No ${group.label.toLowerCase()} issues`}>
+                        <span className="text-[10px] uppercase tracking-wider text-zinc-500">{group.label}</span>
+                        <div className="text-lg font-bold" style={{ color: group.color }}>{group.count}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <SeverityBar issues={report.issues} />
               </div>
             </div>
@@ -2083,6 +2133,16 @@ export default function Report() {
                                   Secrets Scan
                                 </span>
                               )}
+                              {issue.detectionMethod === "deterministic-sast" && (
+                                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold border border-red-500/30 bg-red-500/10 text-red-400">
+                                  Confirmed Code Check
+                                </span>
+                              )}
+                              {issue.detectionMethod === "dast-probe" && (
+                                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold border border-cyan-500/30 bg-cyan-500/10 text-cyan-300">
+                                  Active Probe
+                                </span>
+                              )}
                               {issue.detectionMethod === "sca-osv" && (
                                 <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold border border-orange-500/30 bg-orange-500/10 text-orange-400">
                                   CVE/OSV
@@ -2219,6 +2279,17 @@ export default function Report() {
                                         </button>
                                       </div>
                                       <pre className="code-block text-emerald-300/90 text-[11px]">{fixResults[actualIndex].fixCode}</pre>
+                                      {fixResults[actualIndex].validation && (
+                                        <div className={[
+                                          "text-[11px] px-3 py-2 rounded-lg border",
+                                          fixResults[actualIndex].validation!.valid
+                                            ? "text-emerald-300 bg-emerald-500/5 border-emerald-500/15"
+                                            : "text-amber-300 bg-amber-500/5 border-amber-500/15",
+                                        ].join(" ")}>
+                                          {fixResults[actualIndex].validation!.valid ? "Syntax validated" : "Validation warning"} · {fixResults[actualIndex].validation!.message}
+                                          {fixResults[actualIndex].validation!.regenerated && " · regenerated once"}
+                                        </div>
+                                      )}
                                       <div className="p-3 rounded-xl bg-violet-500/5 border border-violet-500/15 text-xs text-zinc-300 leading-relaxed">
                                         <span className="text-violet-300 font-semibold">Why this works: </span>
                                         {fixResults[actualIndex].explanation}
