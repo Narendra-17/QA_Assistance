@@ -1,0 +1,69 @@
+The DAST active probe logic has confirmed false positives and one critical logic error. Fix the following exactly:
+
+Fix 1 — Sensitive Path Probe: HTTP status logic is wrong
+
+The current probe flags any non-404 response as a vulnerability. This is incorrect. Here is the correct severity mapping:
+
+200 on a truly sensitive path like /.env, /.git/config, /phpinfo.php, /server-status, /actuator/health → HIGH finding — file is genuinely exposed
+200 on /swagger.json or /openapi.json → LOW finding — API docs exposed, informational
+301 / 302 / 308 on /admin → LOW at most — this is a login redirect, not access granted. Change title to "Admin path redirects (possible panel exists)" and severity to low, not medium
+403 on any path → NOT a finding at all — 403 means the server knows the path exists but is explicitly blocking access. This is the correct secure behavior. Remove 403 from findings entirely
+404 on any path → NOT a finding — path does not exist, correct behavior
+
+Update the probe logic:
+
+if status === 200 AND path is in [/.env, /.git/config, /phpinfo.php, /server-status, /actuator/health] → HIGH severity
+if status === 200 AND path is in [/swagger.json, /openapi.json] → LOW severity (informational)
+if status === 200 AND path is in [/admin] → MEDIUM severity (admin panel publicly accessible)
+if status is 301/302/308 AND path is /admin → LOW severity (redirect may indicate panel exists)
+if status === 403 → SKIP entirely, do not report, this is correct server behavior
+if status === 404 → SKIP entirely
+
+Fix 2 — Remove /.well-known/security.txt from the sensitive paths list entirely
+
+/.well-known/security.txt is defined by RFC 9116 as an intentionally public file that websites use to publish security contact information. It is a security best practice, not a vulnerability. Finding it at 200 means the site is FOLLOWING the standard correctly.
+
+Remove it from the sensitive paths probe list completely
+If you want to keep it, change the logic to: if security.txt is present → add it as a POSITIVE note in the summary ("Site has a security.txt — good practice"), never as a finding
+
+Fix 3 — Add HTTP status to the finding description
+
+For any sensitive path finding that does get reported, the finding description must include the actual HTTP status code observed, not just "returned HTTP 308 instead of a not-found response." Change the title and description format to:
+
+Title: "Admin panel accessible at /admin (HTTP 200)" — not just "Sensitive path exposed: /admin"
+Description: explicitly state what the status means: "The /admin path returned HTTP 200, indicating the admin interface is publicly accessible without redirecting to authentication"
+Evidence field: "GET /admin → HTTP 200" — this is the exact measured value
+
+Fix 4 — Add a whitelist of paths that should never be flagged regardless of status
+
+Create a NEVER_FLAG_PATHS list that is always skipped in the probe:
+
+/.well-known/security.txt
+/.well-known/change-password
+/.well-known/openid-configuration
+/robots.txt
+/sitemap.xml
+/favicon.ico
+/manifest.json
+
+These are all intentionally public standard paths. Finding them at 200 is correct behavior.
+
+Fix 5 — Validate the fix with these exact probe scenarios
+
+After implementing, confirm the following behavior:
+
+/phpinfo.php → 403 → NOT reported (access denied = correct)
+/phpinfo.php → 200 → Reported as HIGH (file genuinely exposed)
+/.well-known/security.txt → 200 → NOT reported (intentionally public)
+/admin → 308 → Reported as LOW with title "Admin path redirects — panel may exist"
+/admin → 200 → Reported as MEDIUM with title "Admin panel publicly accessible"
+/.env → 200 → Reported as CRITICAL (production secrets exposed)
+
+Fix 6 — Add /.env and /.git/config to sensitive paths with CRITICAL severity
+
+These two paths are currently missing from the probe list but are the most dangerous real-world exposures:
+
+/.env returning 200 → CRITICAL — production API keys, database credentials, secrets exposed
+/.git/config returning 200 → HIGH — git repository metadata exposed, can be used to reconstruct source code
+
+Add both to the probe list with appropriate severity.

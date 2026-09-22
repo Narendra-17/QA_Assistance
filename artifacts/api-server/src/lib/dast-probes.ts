@@ -19,11 +19,123 @@ export interface DastProbeIssue {
 }
 
 const PROBE_PATHS = [
-  "/.git/config", "/.env", "/api/v1/users", "/admin", "/phpinfo.php",
-  "/server-status", "/actuator/health", "/swagger.json", "/openapi.json",
-  "/.well-known/security.txt",
+  "/.env", "/.git/config", "/admin", "/phpinfo.php", "/server-status",
+  "/actuator/health", "/swagger.json", "/openapi.json",
 ];
+const NEVER_FLAG_PATHS = new Set([
+  "/.well-known/security.txt",
+  "/.well-known/change-password",
+  "/.well-known/openid-configuration",
+  "/robots.txt",
+  "/sitemap.xml",
+  "/favicon.ico",
+  "/manifest.json",
+]);
 const REDIRECT_KEYS = ["redirect", "next", "return", "url", "goto"];
+
+type SensitivePathClassification = {
+  title: string;
+  description: string;
+  severity: DastProbeIssue["severity"];
+  possibleCause: string;
+  suggestedFix: string;
+  owasp: string;
+  effortLevel: DastProbeIssue["effortLevel"];
+  effortNote: string;
+} | null;
+
+export function classifySensitivePathResponse(
+  pathname: string,
+  status: number,
+  contentType: string | null,
+): SensitivePathClassification {
+  if (NEVER_FLAG_PATHS.has(pathname) || status === 403 || status === 404) return null;
+
+  const evidence = `HTTP ${status}`;
+  if (pathname === "/admin" && [301, 302, 308].includes(status)) {
+    return {
+      title: `Admin path redirects — panel may exist (${evidence})`,
+      description: `The /admin path returned ${evidence}, indicating that the server redirects requests instead of directly granting access. This may be a login redirect to an administrative panel.`,
+      severity: "low",
+      possibleCause: "An administrative panel is reachable at the public origin but redirects unauthenticated requests.",
+      suggestedFix: "Confirm the panel requires authentication and restrict administrative access where appropriate.",
+      owasp: "A05:2021-Security Misconfiguration",
+      effortLevel: "low",
+      effortNote: "Verify authentication and administrative access controls.",
+    };
+  }
+
+  if (status !== 200) return null;
+
+  if (pathname === "/.env") {
+    return {
+      title: `Sensitive file exposed at /.env (${evidence})`,
+      description: `The /.env path returned ${evidence}, indicating that production configuration and secrets may be publicly accessible.`,
+      severity: "critical",
+      possibleCause: "Environment configuration is located inside the public web root or is not denied at the edge.",
+      suggestedFix: "Remove the file from the public web root, deny the path, and rotate any disclosed secrets.",
+      owasp: "A05:2021-Security Misconfiguration",
+      effortLevel: "low",
+      effortNote: "Remove the exposed file, block the path, and rotate disclosed secrets.",
+    };
+  }
+
+  if (pathname === "/.git/config") {
+    return {
+      title: `Git metadata exposed at /.git/config (${evidence})`,
+      description: `The /.git/config path returned ${evidence}, indicating that repository metadata may be publicly accessible and usable to reconstruct source history.`,
+      severity: "high",
+      possibleCause: "The repository metadata directory is inside the public web root or is not denied at the edge.",
+      suggestedFix: "Remove repository metadata from the deployed web root and deny /.git paths at the edge.",
+      owasp: "A05:2021-Security Misconfiguration",
+      effortLevel: "low",
+      effortNote: "Remove repository metadata and block the path.",
+    };
+  }
+
+  if (pathname === "/admin") {
+    return {
+      title: `Admin panel accessible at /admin (${evidence})`,
+      description: `The /admin path returned ${evidence}, indicating the admin interface is publicly accessible without redirecting to authentication.`,
+      severity: "medium",
+      possibleCause: "Administrative functionality is exposed at a public route without a confirmed authentication boundary.",
+      suggestedFix: "Require authentication and authorization before serving the administrative interface.",
+      owasp: "A01:2021-Broken Access Control",
+      effortLevel: "medium",
+      effortNote: "Enforce authentication and authorization at the administrative route.",
+    };
+  }
+
+  const highPaths = new Set(["/phpinfo.php", "/server-status", "/actuator/health"]);
+  if (highPaths.has(pathname)) {
+    return {
+      title: `Sensitive path exposed at ${pathname} (${evidence})`,
+      description: `The ${pathname} path returned ${evidence}, indicating that a sensitive diagnostic, status, or administrative resource is publicly accessible.`,
+      severity: "high",
+      possibleCause: "A diagnostic or administrative resource is reachable from the public origin.",
+      suggestedFix: "Remove the resource from the public web root or require authentication and deny the path at the edge.",
+      owasp: "A05:2021-Security Misconfiguration",
+      effortLevel: "low",
+      effortNote: "Restrict the exposed path and review any disclosed information.",
+    };
+  }
+
+  if (pathname === "/swagger.json" || pathname === "/openapi.json") {
+    return {
+      title: `API documentation exposed at ${pathname} (${evidence})`,
+      description: `The ${pathname} path returned ${evidence}, indicating that API documentation is publicly discoverable. This is informational unless the documentation reveals sensitive operations.`,
+      severity: "low",
+      possibleCause: "API documentation is served from a public route.",
+      suggestedFix: "Decide whether public API documentation is intended; otherwise restrict it or remove sensitive details.",
+      owasp: "A05:2021-Security Misconfiguration",
+      effortLevel: "low",
+      effortNote: "Review whether the documentation should be public.",
+    };
+  }
+
+  void contentType;
+  return null;
+}
 
 function issue(data: Omit<DastProbeIssue, "codeSnippet" | "filePath" | "lineNumber" | "detectionMethod" | "confidence">): DastProbeIssue {
   return {
@@ -130,19 +242,16 @@ export async function runDastProbes(appUrl: string, html: string): Promise<DastP
 
   const pathResults = (await Promise.all(PROBE_PATHS.map(async pathname => {
     const response = await request(new URL(pathname, target.origin).toString());
-    return response && response.status !== 404 ? { pathname, status: response.status, type: response.headers.get("content-type") } : null;
+    return response
+      ? { pathname, status: response.status, type: response.headers.get("content-type") }
+      : null;
   }))).filter((result): result is { pathname: string; status: number; type: string | null } => result !== null);
   for (const result of pathResults) {
+    const classification = classifySensitivePathResponse(result.pathname, result.status, result.type);
+    if (!classification) continue;
     findings.push(issue({
-      title: `Sensitive path exposed: ${result.pathname}`,
-      description: `A commonly sensitive path returned HTTP ${result.status} instead of a not-found response.`,
-      evidence: `${result.pathname} → ${result.status} (${result.type ?? "unknown content type"})`,
-      severity: result.pathname === "/.env" || result.pathname === "/.git/config" ? "critical" : "medium",
-      possibleCause: "Administrative, metadata, or configuration content is reachable from the public origin.",
-      suggestedFix: "Remove the resource from the public web root and deny the path at the edge.",
-      owasp: "A05:2021-Security Misconfiguration",
-      effortLevel: "low",
-      effortNote: "Restrict the exposed path and rotate any secrets if content was disclosed.",
+      ...classification,
+      evidence: `GET ${result.pathname} → HTTP ${result.status}`,
     }));
   }
 
