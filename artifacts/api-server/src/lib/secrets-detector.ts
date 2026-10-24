@@ -418,6 +418,43 @@ export function detectSecrets(
 }
 
 /**
+ * Remove every detected secret's full source line before code is included in an
+ * AI prompt. If a detector ever reports a secret without a usable line number,
+ * redact that entire file rather than risk sending the value externally.
+ */
+export function redactSecretLines(
+  files: Array<{ name: string; content: string }>,
+  findings: Array<Pick<SecretFinding, "filePath" | "lineNumber">>,
+): Array<{ name: string; content: string }> {
+  const linesByFile = new Map<string, Set<number>>();
+  const redactWholeFile = new Set<string>();
+  for (const finding of findings) {
+    if (!Number.isInteger(finding.lineNumber) || (finding.lineNumber ?? 0) < 1) {
+      redactWholeFile.add(finding.filePath);
+      continue;
+    }
+    const lines = linesByFile.get(finding.filePath) ?? new Set<number>();
+    lines.add(finding.lineNumber!);
+    linesByFile.set(finding.filePath, lines);
+  }
+
+  return files.map(file => {
+    if (redactWholeFile.has(file.name)) {
+      return { ...file, content: `[file redacted from AI analysis because a detected secret had no line number: ${file.name}]` };
+    }
+    const lines = linesByFile.get(file.name);
+    if (!lines) return file;
+    return {
+      ...file,
+      content: file.content
+        .split(/\r?\n/)
+        .map((line, index) => lines.has(index + 1) ? `// [detected secret redacted at line ${index + 1}]` : line)
+        .join("\n"),
+    };
+  });
+}
+
+/**
  * Convert secrets findings to report issue format.
  * Used to prepend deterministic findings before the AI-generated issues.
  */

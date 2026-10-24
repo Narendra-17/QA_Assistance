@@ -7,7 +7,7 @@ import {
   TrendingUp, BarChart3, RotateCcw, RotateCw, ChevronDown, ChevronUp,
   Share2, FileText, Shield, Clock, Check, Eye, X, Zap,
   Wand2, Target, Swords, Layers, Search, Bell, History, ListFilter, ArrowUpDown,
-  Pencil, MessageSquare,
+  Pencil, MessageSquare, GitBranch,
 } from "lucide-react";
 import { PieChart, Pie, Cell, Tooltip as RechartTooltip, ResponsiveContainer } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,7 @@ interface Issue {
   codeSnippet?: string | null;
   filePath?: string | null;
   lineNumber?: number | null;
-  detectionMethod?: "deterministic" | "deterministic-sast" | "dast-probe" | "sca-osv" | "ai";
+  detectionMethod?: "deterministic" | "deterministic-sast" | "dast-probe" | "sca-osv" | "taint-engine" | "ai";
   owasp?: string | null;
   effortLevel?: "low" | "medium" | "high" | null;
   effortNote?: string | null;
@@ -39,6 +39,13 @@ interface Issue {
   exploitScenario?: string | null;
   // AI confidence level for SAST findings
   confidence?: "confirmed" | "probable" | "theoretical" | null;
+  vulnClass?: string | null;
+  dataFlowPath?: Array<{
+    file: string;
+    line: number;
+    snippet: string;
+    step: string;
+  }> | null;
 }
 
 interface Report {
@@ -2148,6 +2155,11 @@ export default function Report() {
                                   CVE/OSV
                                 </span>
                               )}
+                              {issue.detectionMethod === "taint-engine" && (
+                                <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold border border-violet-500/30 bg-violet-500/10 text-violet-300">
+                                  Taint Flow
+                                </span>
+                              )}
                               {/* OWASP category badge */}
                               <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold border font-mono hidden sm:inline-block"
                                 style={{ background: "rgba(6,182,212,0.08)", color: "#06B6D4", borderColor: "rgba(6,182,212,0.2)" }}>
@@ -2235,6 +2247,34 @@ export default function Report() {
                                     </div>
                                     <p className="text-xs text-red-200/80 leading-relaxed">{issue.exploitScenario}</p>
                                   </div>
+                                )}
+
+                                {issue.dataFlowPath && issue.dataFlowPath.length > 0 && (
+                                  <section className="rounded-xl p-3.5 bg-violet-500/[0.04] border border-violet-400/15">
+                                    <div className="flex items-center gap-1.5 mb-3">
+                                      <GitBranch className="w-3.5 h-3.5 text-violet-300" />
+                                      <p className="text-[10px] font-bold text-violet-200 uppercase tracking-widest">Data flow</p>
+                                      {issue.vulnClass && (
+                                        <span className="ml-auto text-[9px] font-mono text-violet-300/80">{issue.vulnClass}</span>
+                                      )}
+                                    </div>
+                                    <ol className="relative ml-1 border-l border-violet-400/20 pl-4 space-y-3">
+                                      {issue.dataFlowPath.map((step, stepIndex) => (
+                                        <li key={`${step.file}:${step.line}:${stepIndex}`} className="relative min-w-0">
+                                          <span className="absolute -left-[21px] top-0.5 w-2.5 h-2.5 rounded-full border border-violet-300/60 bg-[#11111a]" />
+                                          <div className="flex items-baseline gap-2 flex-wrap">
+                                            <span className="text-[10px] text-violet-200/80">{step.step}</span>
+                                            <span className="text-[10px] font-mono text-zinc-500 break-all">{step.file}:{step.line}</span>
+                                          </div>
+                                          {step.snippet && (
+                                            <pre className="mt-1 text-[10px] text-zinc-300/90 font-mono whitespace-pre-wrap break-all leading-relaxed">
+                                              {step.snippet}
+                                            </pre>
+                                          )}
+                                        </li>
+                                      ))}
+                                    </ol>
+                                  </section>
                                 )}
 
                                 {issue.codeSnippet && (

@@ -9,3 +9,4 @@
 - [AI Fix prompt: DAST vs SAST](ai-fix-dast-sast.md) — fix generation now branches on isSast && hasCodeSnippet: SAST gets the actual vulnerable code snippet; DAST gets evidence + suggestedFix direction + instruction to generate an HTTP header/nginx/Express config block.
 - [Headless DAST runtime](dast-browser-runtime.md) — use workspace Chromium when present and retain static-fetch fallback when browser launch is unavailable.
 - [DAST probe status policy](dast-probe-status-policy.md) — classify sensitive paths by explicit status/path rules; skip 403/404 and standard public metadata paths.
+- [Uploaded-code analysis safety](taint-input-safety.md) — parse SAST uploads as data only, and redact detected-secret lines before any external AI prompt.

@@ -16,6 +16,12 @@ interface Issue {
   filePath?: string | null;
   lineNumber?: number | null;
   detectionMethod?: string | null;
+  dataFlowPath?: Array<{
+    file: string;
+    line: number;
+    snippet: string;
+    step: string;
+  }> | null;
 }
 
 type SarifLevel = "error" | "warning" | "note";
@@ -29,7 +35,7 @@ function severityToLevel(sev: Issue["severity"]): SarifLevel {
 function issueToRuleId(issue: Issue, index: number): string {
   const method = issue.detectionMethod ?? "ai";
   const prefix =
-    method === "deterministic" ? "SEC" : method === "sca-osv" ? "SCA" : "QA";
+    method === "deterministic" ? "SEC" : method === "sca-osv" ? "SCA" : method === "taint-engine" ? "TAINT" : "QA";
   const sev = issue.severity.slice(0, 3).toUpperCase();
   return `${prefix}-${sev}-${String(index + 1).padStart(3, "0")}`;
 }
@@ -87,7 +93,7 @@ export function buildSarif(
       };
     }
 
-    return {
+    const result: Record<string, unknown> = {
       ruleId,
       level,
       message: {
@@ -101,6 +107,22 @@ export function buildSarif(
         detectionMethod: issue.detectionMethod ?? "ai",
       },
     };
+    if (issue.dataFlowPath?.length) {
+      result.codeFlows = [{
+        threadFlows: [{
+          locations: issue.dataFlowPath.map(step => ({
+            location: {
+              physicalLocation: {
+                artifactLocation: { uri: step.file, uriBaseId: "%SRCROOT%" },
+                region: { startLine: step.line, startColumn: 1 },
+              },
+              message: { text: `${step.step}: ${step.snippet}` },
+            },
+          })),
+        }],
+      }];
+    }
+    return result;
   });
 
   return {

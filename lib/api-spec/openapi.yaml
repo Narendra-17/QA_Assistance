@@ -317,20 +317,7 @@ paths:
         content:
           multipart/form-data:
             schema:
-              type: object
-              required: [projectName, description]
-              properties:
-                projectName:
-                  type: string
-                  minLength: 1
-                description:
-                  type: string
-                  minLength: 5
-                files:
-                  type: array
-                  items:
-                    type: string
-                    format: binary
+              $ref: '#/components/schemas/SastRunInput'
       responses:
         '201':
           description: SAST run created
@@ -445,6 +432,22 @@ components:
         error:
           type: string
 
+    SastRunInput:
+      type: object
+      required: [projectName, description]
+      properties:
+        projectName:
+          type: string
+          minLength: 1
+        description:
+          type: string
+          minLength: 5
+        files:
+          type: array
+          items:
+            type: string
+            format: binary
+
     QaIssueSeverity:
       type: string
       enum: [low, medium, high, critical]
@@ -469,6 +472,32 @@ components:
           type: [string, 'null']
         lineNumber:
           type: [number, 'null']
+        detectionMethod:
+          type: string
+          enum: [deterministic, deterministic-sast, dast-probe, sca-osv, taint-engine, ai]
+        confidence:
+          type: [string, 'null']
+          enum: [confirmed, probable, theoretical, null]
+        vulnClass:
+          type: [string, 'null']
+        dataFlowPath:
+          type: array
+          items:
+            $ref: '#/components/schemas/QaDataFlowStep'
+
+    QaDataFlowStep:
+      type: object
+      required: [file, line, snippet, step]
+      properties:
+        file:
+          type: string
+        line:
+          type: integer
+          minimum: 1
+        snippet:
+          type: string
+        step:
+          type: string
 
     QaReport:
       type: object

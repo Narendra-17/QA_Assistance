@@ -20,7 +20,7 @@ import {
   SecurityError,
   logSecurityEvent,
 } from "../lib/security";
-import { detectSecrets, secretsToIssues } from "../lib/secrets-detector";
+import { detectSecrets, redactSecretLines, secretsToIssues } from "../lib/secrets-detector";
 import { scanDependencies, scaToIssues } from "../lib/sca-scanner";
 import { apiKeyAuth } from "../lib/api-key-auth";
 import { buildSarif } from "../lib/sarif";
@@ -30,6 +30,7 @@ import {
   redactDeterministicLines,
   scanDeterministicSast,
 } from "../lib/deterministic-sast";
+import { dedupeTaintAgainstDeterministic, scanTaintFlows, taintFindingToIssue } from "../lib/taint-engine";
 import { captureDastBrowser } from "../lib/dast-browser";
 import { runDastProbes } from "../lib/dast-probes";
 
@@ -152,6 +153,16 @@ async function withAiDeadline<T>(fn: () => Promise<T>, label: string): Promise<T
       () => reject(new Error(`${label} timed out after ${AI_REQUEST_TIMEOUT_MS / 1000}s`)),
       AI_REQUEST_TIMEOUT_MS,
     );
+    fn().then(
+      value => { clearTimeout(timer); resolve(value); },
+      error => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+async function withStageDeadline<T>(fn: () => Promise<T>, label: string, timeoutMs: number): Promise<T> {
+  return await new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs / 1000}s`)), timeoutMs);
     fn().then(
       value => { clearTimeout(timer); resolve(value); },
       error => { clearTimeout(timer); reject(error); },
@@ -681,6 +692,8 @@ interface RawIssue {
   possibleCause?: unknown;
   suggestedFix?: unknown;
   exploitScenario?: unknown;
+  dataFlowPath?: unknown;
+  vulnClass?: unknown;
   [key: string]: unknown;
 }
 
@@ -1021,13 +1034,37 @@ async function analyzeCodeEnhanced(
     scanDependencies(files),
   ]);
   const deterministicSastIssues = scanDeterministicSast(files);
+  let taintStageIssues: Array<Record<string, unknown>> = [];
+  onProgress?.("taint-analysis", "Parsing JavaScript, TypeScript, and Python files and tracing source-to-sink flows...");
+  try {
+    const taintResult = await withStageDeadline(() => scanTaintFlows(files), "Taint analysis", 30_000);
+    taintStageIssues = taintResult.findings.map(taintFindingToIssue);
+    if (taintResult.skippedFiles.length) {
+      logger.warn(
+        { skippedFiles: taintResult.skippedFiles.slice(0, 25) },
+        "Taint analysis skipped files that could not be parsed or are outside Phase 1 language support",
+      );
+    }
+    onProgress?.(
+      "taint-analysis",
+      `Taint analysis complete: ${taintStageIssues.length} findings across ${taintResult.parsedFiles.length} parsed files.`,
+    );
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, "Taint analysis failed; continuing with existing SAST checks");
+    onProgress?.("taint-analysis", "Taint analysis was unavailable; continuing with the existing SAST checks.");
+  }
+  const dedupedSastIssues = dedupeTaintAgainstDeterministic(
+    taintStageIssues,
+    deterministicSastIssues as unknown as Array<Record<string, unknown>>,
+  );
   const deterministicIssues = [
     ...secretsToIssues(secretFindings),
     ...scaToIssues(scaFindings),
-    ...deterministicSastIssues,
+    ...dedupedSastIssues,
   ];
-  const deterministicTitles = new Set(deterministicIssues.map(issue => issue.title));
-  const redactedFiles = redactDeterministicLines(files, deterministicSastIssues);
+  const deterministicTitles = new Set(deterministicIssues.map(issue => String(issue.title ?? "")));
+  const secretRedactedFiles = redactSecretLines(files, secretFindings);
+  const redactedFiles = redactDeterministicLines(secretRedactedFiles, deterministicSastIssues);
 
   const highSignal = (file: { name: string }): number => {
     const name = file.name.toLowerCase();
