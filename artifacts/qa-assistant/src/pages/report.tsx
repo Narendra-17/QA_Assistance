@@ -55,8 +55,14 @@ interface Report {
   recommendations: string[];
   testType?: "url" | "sast";
   deterministicFindings?: { secretsFound: number; deterministicChecksFound?: number; vulnerableDepsFound: number };
-  // Files truncated to AI char limit — user should manually review remainder
+  // Files with one or more chunks omitted by the AI context budget.
   truncatedFiles?: string[];
+  unscannedChunks?: Array<{
+    file: string;
+    startLine: number;
+    endLine: number;
+    reason: string;
+  }>;
   delta?: {
     newIssues: string[];
     fixedIssues: string[];
@@ -1870,8 +1876,8 @@ export default function Report() {
               </motion.div>
             )}
 
-            {/* Truncation warning — shown when one or more SAST files were cut */}
-            {report.truncatedFiles && report.truncatedFiles.length > 0 && (
+            {/* Partial-analysis warning includes every chunk omitted by the AI context cap */}
+            {((report.unscannedChunks?.length ?? 0) > 0 || (report.truncatedFiles?.length ?? 0) > 0) && (
               <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
                 className="relative rounded-2xl border border-amber-500/22 overflow-hidden"
                 style={{ background: "linear-gradient(135deg, rgba(245,158,11,0.07), rgba(245,158,11,0.03))" }}>
@@ -1881,13 +1887,26 @@ export default function Report() {
                     <AlertTriangle className="w-4 h-4 text-amber-400" />
                   </div>
                   <div className="text-sm">
-                    <span className="text-amber-300 font-bold">Partial analysis — {report.truncatedFiles.length} large file{report.truncatedFiles.length > 1 ? "s" : ""} truncated · </span>
-                    <span className="text-amber-200/80">
-                      {report.truncatedFiles.length <= 3
-                        ? report.truncatedFiles.join(", ")
-                        : `${report.truncatedFiles.slice(0, 3).join(", ")} and ${report.truncatedFiles.length - 3} more`
-                      }. Vulnerabilities beyond the first 12 000 characters of these files were not analyzed. Consider splitting large files or reviewing the remainder manually.
+                    <span className="text-amber-300 font-bold">
+                      {report.unscannedChunks?.length
+                        ? `Partial analysis — ${report.unscannedChunks.length} code chunk${report.unscannedChunks.length === 1 ? "" : "s"} not scanned`
+                        : `Partial analysis — ${report.truncatedFiles?.length ?? 0} file${report.truncatedFiles?.length === 1 ? "" : "s"} were truncated in this older report`}
                     </span>
+                    <span className="text-amber-200/80">
+                      {!report.unscannedChunks?.length && report.truncatedFiles?.length
+                        ? ` ${report.truncatedFiles.join(", ")}. Rerun the scan to review the complete files.`
+                        : ""}
+                    </span>
+                    {report.unscannedChunks?.length ? (
+                      <ul className="mt-2 max-h-40 overflow-y-auto space-y-1 text-xs text-amber-100/80">
+                        {report.unscannedChunks.map((chunk, index) => (
+                          <li key={`${chunk.file}:${chunk.startLine}-${chunk.endLine}:${index}`}>
+                            <span className="font-mono">{chunk.file}:{chunk.startLine}-{chunk.endLine}</span>
+                            <span className="text-amber-200/60"> — {chunk.reason}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </div>
                 </div>
               </motion.div>

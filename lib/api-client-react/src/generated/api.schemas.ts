@@ -129,6 +129,15 @@ export const QaReportTestType = {
   sast: 'sast',
 } as const;
 
+export interface QaUnscannedChunk {
+  file: string;
+  /** @minimum 1 */
+  startLine: number;
+  /** @minimum 1 */
+  endLine: number;
+  reason: string;
+}
+
 export interface QaReport {
   summary: string;
   issues: QaIssue[];
@@ -141,6 +150,8 @@ export interface QaReport {
   /** @nullable */
   screenshotBase64?: string | null;
   testType?: QaReportTestType;
+  truncatedFiles?: string[];
+  unscannedChunks?: QaUnscannedChunk[];
 }
 
 export type QaRunStatus = typeof QaRunStatus[keyof typeof QaRunStatus];

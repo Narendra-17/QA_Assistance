@@ -159,6 +159,8 @@ export const getQaRunResponseTwoReportOneOverallScoreMax = 100;
 
 
 
+
+
 export const GetQaRunResponse = zod.object({
   "id": zod.string(),
   "userId": zod.string(),
@@ -195,7 +197,14 @@ export const GetQaRunResponse = zod.object({
   "overallScore": zod.number().min(getQaRunResponseTwoReportOneOverallScoreMin).max(getQaRunResponseTwoReportOneOverallScoreMax),
   "recommendations": zod.array(zod.string()),
   "screenshotBase64": zod.string().nullish(),
-  "testType": zod.enum(['url', 'sast']).optional()
+  "testType": zod.enum(['url', 'sast']).optional(),
+  "truncatedFiles": zod.array(zod.string()).optional(),
+  "unscannedChunks": zod.array(zod.object({
+  "file": zod.string(),
+  "startLine": zod.number().min(1),
+  "endLine": zod.number().min(1),
+  "reason": zod.string()
+})).optional()
 }),zod.null()]).optional()
 }))
 

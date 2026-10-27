@@ -30,4 +30,5 @@ export * from './qaRunStatus';
 export * from './qaRunType';
 export * from './qaRunWithReport';
 export * from './qaStats';
+export * from './qaUnscannedChunk';
 export * from './sastRunInput';

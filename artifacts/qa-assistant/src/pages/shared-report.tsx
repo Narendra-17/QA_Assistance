@@ -36,6 +36,13 @@ interface Report {
   recommendations: string[];
   testType?: "url" | "sast";
   deterministicFindings?: { secretsFound: number; vulnerableDepsFound: number };
+  truncatedFiles?: string[];
+  unscannedChunks?: Array<{
+    file: string;
+    startLine: number;
+    endLine: number;
+    reason: string;
+  }>;
 }
 
 const SEV_CONFIG = {
@@ -264,6 +271,33 @@ export default function SharedReport() {
             </div>
           </div>
         )}
+
+        {(report.unscannedChunks?.length || report.truncatedFiles?.length) ? (
+          <div className="p-4 rounded-2xl border border-amber-500/20 bg-amber-500/5 flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="min-w-0 text-sm text-amber-200">
+              <p className="font-semibold text-amber-300">
+                {report.unscannedChunks?.length
+                  ? `Partial analysis — ${report.unscannedChunks.length} code chunk${report.unscannedChunks.length === 1 ? "" : "s"} not scanned`
+                  : `Partial analysis — ${report.truncatedFiles?.length ?? 0} file${report.truncatedFiles?.length === 1 ? "" : "s"} were truncated in this older report`}
+              </p>
+              {report.unscannedChunks?.length ? (
+                <ul className="mt-2 max-h-40 overflow-y-auto space-y-1 text-xs text-amber-100/80">
+                  {report.unscannedChunks.map((chunk, index) => (
+                    <li key={`${chunk.file}:${chunk.startLine}-${chunk.endLine}:${index}`}>
+                      <span className="font-mono">{chunk.file}:{chunk.startLine}-{chunk.endLine}</span>
+                      <span className="text-amber-200/60"> — {chunk.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-amber-100/70">
+                  {report.truncatedFiles?.join(", ")}. Rerun the scan to review the complete files.
+                </p>
+              )}
+            </div>
+          </div>
+        ) : null}
 
         {/* Recommendations */}
         {report.recommendations.length > 0 && (

@@ -7,6 +7,7 @@
  */
 import type { QaIssue } from './qaIssue';
 import type { QaReportTestType } from './qaReportTestType';
+import type { QaUnscannedChunk } from './qaUnscannedChunk';
 
 export interface QaReport {
   summary: string;
@@ -20,4 +21,6 @@ export interface QaReport {
   /** @nullable */
   screenshotBase64?: string | null;
   testType?: QaReportTestType;
+  truncatedFiles?: string[];
+  unscannedChunks?: QaUnscannedChunk[];
 }

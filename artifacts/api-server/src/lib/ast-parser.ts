@@ -41,6 +41,7 @@ export interface AstNode {
   name?: string;
   text: string;
   line: number;
+  endLine?: number;
   operator?: string;
   children: AstNode[];
   target?: AstNode;
@@ -59,12 +60,25 @@ export interface ParsedFile {
   root: AstNode;
 }
 
+export interface ParseSourceFilesResult {
+  parsed: ParsedFile[];
+  skipped: Array<{ name: string; reason: string }>;
+}
+
 const pythonAstScript = String.raw`
 import ast, base64, json, sys
 source = base64.b64decode(sys.argv[1]).decode("utf-8", "replace")
 
 def line_of(node):
     return int(getattr(node, "lineno", 1) or 1)
+
+def start_line_of(node):
+    lines = [line_of(node)]
+    lines.extend(line_of(item) for item in getattr(node, "decorator_list", []))
+    return min(lines)
+
+def end_line_of(node):
+    return int(getattr(node, "end_lineno", None) or line_of(node))
 
 def text_of(node):
     try:
@@ -76,7 +90,13 @@ def text_of(node):
     return ast.dump(node, include_attributes=False)[:500]
 
 def node(kind, raw, **fields):
-    out = {"kind": kind, "text": text_of(raw), "line": line_of(raw), "children": []}
+    out = {
+        "kind": kind,
+        "text": text_of(raw),
+        "line": start_line_of(raw),
+        "endLine": end_line_of(raw),
+        "children": [],
+    }
     out.update(fields)
     return out
 
@@ -231,10 +251,13 @@ function tsNode(
   raw: ts.Node,
   fields: Partial<AstNode> = {},
 ): AstNode {
+  const start = raw.getStart(source, false);
+  const end = Math.max(start, raw.getEnd() - 1);
   return {
     kind,
     text: tsText(source, raw),
-    line: tsLine(source, raw),
+    line: source.getLineAndCharacterOfPosition(start).line + 1,
+    endLine: source.getLineAndCharacterOfPosition(end).line + 1,
     children: [],
     ...fields,
   };
@@ -256,6 +279,33 @@ function tsPattern(source: ts.SourceFile, raw: ts.BindingName): AstNode {
       return tsNode(source, "propertyPattern", element, { name: propertyName, target });
     }),
   });
+}
+
+function tsNestedStatements(source: ts.SourceFile, raw: ts.Node): AstNode[] {
+  const statements: AstNode[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isBlock(node)) {
+      statements.push(...node.statements.flatMap(statement => tsStatement(source, statement)));
+      return;
+    }
+    if (ts.isCaseClause(node) || ts.isDefaultClause(node)) {
+      statements.push(...node.statements.flatMap(statement => tsStatement(source, statement)));
+      return;
+    }
+    if (ts.isCatchClause(node)) {
+      visit(node.block);
+      return;
+    }
+    if (ts.isCaseBlock(node)) {
+      node.clauses.forEach(visit);
+      return;
+    }
+    if (ts.isStatement(node)) {
+      statements.push(...tsStatement(source, node));
+    }
+  };
+  raw.forEachChild(visit);
+  return statements;
 }
 
 function tsExpression(source: ts.SourceFile, raw: ts.Node): AstNode {
@@ -417,7 +467,7 @@ function tsStatement(source: ts.SourceFile, raw: ts.Statement): AstNode[] {
   }
   if (ts.isExpressionStatement(raw)) return [tsExpression(source, raw.expression)];
   return [tsNode(source, "other", raw, {
-    children: raw.getChildren(source).filter(ts.isExpression).map(child => tsExpression(source, child)),
+    children: tsNestedStatements(source, raw),
   })];
 }
 
@@ -466,7 +516,7 @@ function countNodes(root: AstNode): number {
 
 export async function parseSourceFiles(
   files: Array<{ name: string; content: string }>,
-): Promise<{ parsed: ParsedFile[]; skipped: Array<{ name: string; reason: string }> }> {
+): Promise<ParseSourceFilesResult> {
   const results: Array<ParsedFile | { name: string; reason: string }> = new Array(files.length);
   let cursor = 0;
   const parseOne = async (file: { name: string; content: string }): Promise<ParsedFile | { name: string; reason: string }> => {
@@ -480,6 +530,13 @@ export async function parseSourceFiles(
           : /\.jsx$/i.test(file.name) ? ts.ScriptKind.JSX
             : /\.tsx?$/i.test(file.name) ? ts.ScriptKind.TS : ts.ScriptKind.JS;
         const source = ts.createSourceFile(file.name, file.content, ts.ScriptTarget.Latest, true, scriptKind);
+        const parseDiagnostics = (source as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics;
+        if (parseDiagnostics.length) {
+          const diagnostic = parseDiagnostics[0];
+          const position = source.getLineAndCharacterOfPosition(diagnostic.start ?? 0);
+          const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, " ");
+          return { name: file.name, reason: `${message} (line ${position.line + 1})` };
+        }
         root = tsNode(source, "program", source, {
           body: source.statements.flatMap(statement => tsStatement(source, statement)),
         });

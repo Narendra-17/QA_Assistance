@@ -522,6 +522,29 @@ components:
         testType:
           type: string
           enum: [url, sast]
+        truncatedFiles:
+          type: array
+          items:
+            type: string
+        unscannedChunks:
+          type: array
+          items:
+            $ref: '#/components/schemas/QaUnscannedChunk'
+
+    QaUnscannedChunk:
+      type: object
+      required: [file, startLine, endLine, reason]
+      properties:
+        file:
+          type: string
+        startLine:
+          type: integer
+          minimum: 1
+        endLine:
+          type: integer
+          minimum: 1
+        reason:
+          type: string
 
     QaRunStatus:
       type: string

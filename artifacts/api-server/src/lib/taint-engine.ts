@@ -34,6 +34,7 @@ export interface TaintScanResult {
   findings: TaintFinding[];
   parsedFiles: string[];
   skippedFiles: Array<{ name: string; reason: string }>;
+  parsedAst: ParsedFile[];
 }
 
 interface TaintTrace {
@@ -876,6 +877,7 @@ export async function scanTaintFlows(
     findings: dedupeFindings(context.findings),
     parsedFiles: parsed.map(file => file.name),
     skippedFiles: skipped,
+    parsedAst: parsed,
   };
 }
 
